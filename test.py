@@ -51,6 +51,8 @@ ade20k_metadata = MetadataCatalog.get("ade20k_sem_seg_val")
 from Mask2Former.mask2former import add_maskformer2_config
 from utils.seg_class import ADE20K_150_CATEGORIES
 
+from tqdm.auto import tqdm
+
 cfg = get_cfg()
 add_deeplab_config(cfg)
 add_maskformer2_config(cfg)
@@ -223,6 +225,12 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
         else:
             image_names = [args.image_path]
 
+        progress_bar = tqdm(
+            range(0, len(image_names)),
+            initial=0,
+            desc="Processing images",
+        )
+
         for image_idx, image_name in enumerate(image_names[:]):
             print(f'================== process {image_idx} imgs... ===================')
             validation_image = Image.open(image_name).convert("RGB")
@@ -323,6 +331,7 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
             name, ext = os.path.splitext(os.path.basename(image_name))
             
             image.save(f'{args.output_dir}/samples/{name}.png')
+            progress_bar.update(1)
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -697,6 +697,7 @@ text_encoder = text_encoder_cls.from_pretrained(
 )
 vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision)
 
+# None
 if args.unet_model_name_or_path:
     # resume from self-train
     logger.info("Loading unet weights from self-train")
@@ -711,6 +712,8 @@ else:
     )
     print(f'===== if use ram encoder? {unet.config.use_image_cross_attention}')
 
+
+# None
 if args.controlnet_model_name_or_path:
     # resume from self-train
     logger.info("Loading existing controlnet weights")
@@ -1006,7 +1009,7 @@ for epoch in range(first_epoch, args.num_train_epochs):
         lr_batch, hr_batch = realesrgan_degradation(batch)
         lr_batch = lr_batch.to(accelerator.device, dtype=weight_dtype)
         hr_batch = hr_batch.to(accelerator.device, dtype=weight_dtype)
-            
+
         with accelerator.accumulate(controlnet), accelerator.accumulate(unet):
             # pixel_values = hr_batch.to(accelerator.device, dtype=weight_dtype)
             # Convert images to latent space
@@ -1085,6 +1088,8 @@ for epoch in range(first_epoch, args.num_train_epochs):
                 seg_labels, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
             )
             encoder_hidden_states = text_encoder(inputs.input_ids.to(accelerator.device))[0]
+            caption_emb = batch['caption_emb']
+            caption_encoder_hidden_states = caption_emb
 
             # build LR feature for image_attention
             lr_ram = ram_transforms(lr_batch)
@@ -1096,6 +1101,7 @@ for epoch in range(first_epoch, args.num_train_epochs):
                 noisy_latents,
                 timesteps,
                 encoder_hidden_states=encoder_hidden_states,
+                caption_encoder_hidden_states = caption_encoder_hidden_states,
                 controlnet_cond=lr_up,
                 seg_mask=seg_masks,
                 scm=scm_batch,
@@ -1108,6 +1114,7 @@ for epoch in range(first_epoch, args.num_train_epochs):
                 noisy_latents,
                 timesteps,
                 encoder_hidden_states=encoder_hidden_states,
+                caption_encoder_hidden_states=caption_encoder_hidden_states,
                 down_block_additional_residuals=[
                     sample.to(dtype=weight_dtype) for sample in down_block_res_samples
                 ],

@@ -22,15 +22,15 @@ def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: st
         raise ValueError(f"{model_class} is not supported.")
 
 # 文件路径
-captions_path = '/data2/jianglei/dataset/HoliSDiP/test_captions.json'
-embeddings_path = '/data2/jianglei/dataset/HoliSDiP/test_embeddings.npy'
+captions_path = '/data2/jianglei/dataset/HoliSDiP/captions.json'
+embeddings_path = '/data2/jianglei/dataset/HoliSDiP/captions_embeddings.npy'
 
 # 加载caption
 with open(captions_path, 'r') as file:
     captions = json.load(file)
 
 # 模型和tokenizer
-pretrained_model_name_or_path = "/data2/jianglei/HoliSDiP-main/preset/models/stable-diffusion-2-base"
+pretrained_model_name_or_path = "/data2/jianglei/HoliSDiP/preset/models/stable-diffusion-2-base"
 revision = None
 
 tokenizer = AutoTokenizer.from_pretrained(
@@ -64,7 +64,7 @@ for i in tqdm(range(0, len(caption_list), batch_size), desc="Processing captions
         batch_captions,
         return_tensors="pt",
         padding="max_length",
-        max_length=30,
+        max_length=tokenizer.model_max_length,
         truncation=True
     )
 

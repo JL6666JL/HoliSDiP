@@ -274,6 +274,8 @@ def get_up_block(
         attention_head_dim = num_attention_heads
 
     up_block_type = up_block_type[7:] if up_block_type.startswith("UNetRes") else up_block_type
+
+    # 先上采样
     if up_block_type == "UpBlock2D":
         return UpBlock2D(
             num_layers=num_layers,
@@ -302,6 +304,7 @@ def get_up_block(
             skip_time_act=resnet_skip_time_act,
             output_scale_factor=resnet_out_scale_factor,
         )
+    # 后面三个
     elif up_block_type == "CrossAttnUpBlock2D":
         if cross_attention_dim is None:
             raise ValueError("cross_attention_dim must be specified for CrossAttnUpBlock2D")
@@ -606,6 +609,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
             )
         ]
         attentions = []
+        caption_attentions = []
 
         ## for image cross attention
         self.use_image_cross_attention = use_image_cross_attention
@@ -617,6 +621,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
             msft_mid = []
 
         for _ in range(num_layers):
+            # False
             if not dual_cross_attention:
                 attentions.append(
                     Transformer2DModel(
@@ -631,8 +636,31 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                         attention_type=attention_type,
                     )
                 )
+                caption_attentions.append(
+                    Transformer2DModel(
+                        num_attention_heads,
+                        in_channels // num_attention_heads,
+                        in_channels=in_channels,
+                        num_layers=transformer_layers_per_block,
+                        cross_attention_dim=cross_attention_dim,
+                        norm_num_groups=resnet_groups,
+                        use_linear_projection=use_linear_projection,
+                        upcast_attention=upcast_attention,
+                        attention_type=attention_type,
+                    )
+                )
             else:
                 attentions.append(
+                    DualTransformer2DModel(
+                        num_attention_heads,
+                        in_channels // num_attention_heads,
+                        in_channels=in_channels,
+                        num_layers=1,
+                        cross_attention_dim=cross_attention_dim,
+                        norm_num_groups=resnet_groups,
+                    )
+                )
+                caotion_attentions.append(
                     DualTransformer2DModel(
                         num_attention_heads,
                         in_channels // num_attention_heads,
@@ -677,6 +705,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                 msft_mid.append(GFM(in_channels, 3, 128)) # 128 is the number of channels in the text clip map
 
         self.attentions = nn.ModuleList(attentions)
+        self.caption_attentions = nn.ModuleList(caption_attentions)
         self.resnets = nn.ModuleList(resnets)
 
         ## for image cross attention
@@ -693,6 +722,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
         hidden_states: torch.FloatTensor,
         temb: Optional[torch.FloatTensor] = None,
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
+        caption_encoder_hidden_states: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
@@ -709,7 +739,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
             scm = F.interpolate(scm, size=hidden_states.shape[-2:], mode="nearest")
 
         if self.use_image_cross_attention and self.use_msft_mid:
-            for attn, image_attn, resnet, msft_mid in zip(self.attentions, self.image_attentions, self.resnets[1:], self.msft_mid):
+            for attn, caption_attn,image_attn, resnet, msft_mid in zip(self.attentions, self.caption_attentions,self.image_attentions, self.resnets[1:], self.msft_mid):
                 if self.training and self.gradient_checkpointing:
 
                     def create_custom_forward(module, return_dict=None):
@@ -725,6 +755,14 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -752,6 +790,14 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -771,7 +817,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                     hidden_states = resnet(hidden_states, temb)
 
         elif not self.use_image_cross_attention and self.use_msft_mid:
-            for attn, resnet, msft_mid in zip(self.attentions, self.resnets[1:], self.msft_mid):
+            for attn, caption_attn,resnet, msft_mid in zip(self.attentions, self.caption_attentions,self.resnets[1:], self.msft_mid):
                 if self.training and self.gradient_checkpointing:
 
                     def create_custom_forward(module, return_dict=None):
@@ -787,6 +833,14 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -809,12 +863,20 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                         encoder_attention_mask=encoder_attention_mask,
                         return_dict=False,
                     )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0] 
                     ## for sft
                     hidden_states = msft_mid(hidden_states, seg_mask, scm)
                     hidden_states = resnet(hidden_states, temb)
 
         elif self.use_image_cross_attention and not self.use_msft_mid:
-            for attn, image_attn, resnet in zip(self.attentions, self.image_attentions, self.resnets[1:]):
+            for attn, caption_attn,image_attn, resnet in zip(self.attentions, self.caption_attentions,self.image_attentions, self.resnets[1:]):
                 if self.training and self.gradient_checkpointing:
 
                     def create_custom_forward(module, return_dict=None):
@@ -830,6 +892,14 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -854,6 +924,14 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -871,7 +949,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                     hidden_states = resnet(hidden_states, temb)
         
         else:
-            for attn, resnet in zip(self.attentions, self.resnets[1:]):
+            for attn, caption_attn,resnet in zip(self.attentions, self.caption_attentions,self.resnets[1:]):
                 if self.training and self.gradient_checkpointing:
 
                     def create_custom_forward(module, return_dict=None):
@@ -892,6 +970,14 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                         encoder_attention_mask=encoder_attention_mask,
                         return_dict=False,
                     )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
                     hidden_states = torch.utils.checkpoint.checkpoint(
                         create_custom_forward(resnet),
                         hidden_states,
@@ -902,6 +988,14 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -1179,6 +1273,7 @@ class CrossAttnDownBlock2D(nn.Module):
         super().__init__()
         resnets = []
         attentions = []
+        caption_attentions = []
         ## for image cross attention
         self.use_image_cross_attention = use_image_cross_attention
         if self.use_image_cross_attention:
@@ -1208,6 +1303,7 @@ class CrossAttnDownBlock2D(nn.Module):
                     pre_norm=resnet_pre_norm,
                 )
             )
+            # False
             if not dual_cross_attention:
                 attentions.append(
                     Transformer2DModel(
@@ -1223,8 +1319,32 @@ class CrossAttnDownBlock2D(nn.Module):
                         attention_type=attention_type,
                     )
                 )
+                caption_attentions.append(
+                    Transformer2DModel(
+                        num_attention_heads,
+                        out_channels // num_attention_heads,
+                        in_channels=out_channels,
+                        num_layers=transformer_layers_per_block,
+                        cross_attention_dim=cross_attention_dim,
+                        norm_num_groups=resnet_groups,
+                        use_linear_projection=use_linear_projection,
+                        only_cross_attention=only_cross_attention,
+                        upcast_attention=upcast_attention,
+                        attention_type=attention_type,
+                    )
+                )
             else:
                 attentions.append(
+                    DualTransformer2DModel(
+                        num_attention_heads,
+                        out_channels // num_attention_heads,
+                        in_channels=out_channels,
+                        num_layers=1,
+                        cross_attention_dim=cross_attention_dim,
+                        norm_num_groups=resnet_groups,
+                    )
+                )
+                caption_attentions.append(
                     DualTransformer2DModel(
                         num_attention_heads,
                         out_channels // num_attention_heads,
@@ -1256,6 +1376,7 @@ class CrossAttnDownBlock2D(nn.Module):
                 msft_down.append(GFM(out_channels, 3, 128))
 
         self.attentions = nn.ModuleList(attentions)
+        self.caption_attentions = nn.ModuleList(caption_attentions)
         self.resnets = nn.ModuleList(resnets)
 
         ## for image cross attention
@@ -1284,6 +1405,7 @@ class CrossAttnDownBlock2D(nn.Module):
         hidden_states: torch.FloatTensor,
         temb: Optional[torch.FloatTensor] = None,
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
+        caption_encoder_hidden_states: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
@@ -1300,9 +1422,12 @@ class CrossAttnDownBlock2D(nn.Module):
         if scm is not None:
             scm = F.interpolate(scm, size=hidden_states.shape[-2:], mode="nearest")
 
+        # attention_mask和encoder_attention_mask都是None
+        # True True
         if self.use_image_cross_attention and self.use_msft_down:
-            blocks = list(zip(self.resnets, self.attentions, self.image_attentions, self.msft_down))
-            for i, (resnet, attn, image_attn, msft_down) in enumerate(blocks):
+            blocks = list(zip(self.resnets, self.attentions, self.caption_attentions, self.image_attentions, self.msft_down))
+            for i, (resnet, attn, caption_attn,image_attn, msft_down) in enumerate(blocks):
+                # 先True False，然后False False
                 if self.training and self.gradient_checkpointing:
 
                     def create_custom_forward(module, return_dict=None):
@@ -1329,6 +1454,14 @@ class CrossAttnDownBlock2D(nn.Module):
                         encoder_attention_mask=encoder_attention_mask,
                         return_dict=False,
                     )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
                     ## for image cross attention
                     hidden_states = image_attn(
                         hidden_states,
@@ -1346,6 +1479,15 @@ class CrossAttnDownBlock2D(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -1371,8 +1513,8 @@ class CrossAttnDownBlock2D(nn.Module):
                 output_states = output_states + (hidden_states,)
 
         elif not self.use_image_cross_attention and self.use_msft_down:
-            blocks = list(zip(self.resnets, self.attentions, self.msft_down))
-            for i, (resnet, attn, msft_down) in enumerate(blocks):
+            blocks = list(zip(self.resnets, self.attentions,self.caption_attentions ,self.msft_down))
+            for i, (resnet, attn, caption_attn,msft_down) in enumerate(blocks):
                 if self.training and self.gradient_checkpointing:
 
                     def create_custom_forward(module, return_dict=None):
@@ -1394,6 +1536,14 @@ class CrossAttnDownBlock2D(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -1412,6 +1562,14 @@ class CrossAttnDownBlock2D(nn.Module):
                         encoder_attention_mask=encoder_attention_mask,
                         return_dict=False,
                     )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
                     ## for sft
                     if self.use_msft_down:
                         hidden_states = msft_down(hidden_states, seg_mask, scm)
@@ -1423,8 +1581,8 @@ class CrossAttnDownBlock2D(nn.Module):
                 output_states = output_states + (hidden_states,)
 
         elif self.use_image_cross_attention and not self.use_msft_down:
-            blocks = list(zip(self.resnets, self.attentions, self.image_attentions))
-            for i, (resnet, attn, image_attn) in enumerate(blocks):
+            blocks = list(zip(self.resnets, self.attentions, self.caption_attentions,self.image_attentions))
+            for i, (resnet, attn, caption_attn,image_attn) in enumerate(blocks):
                 if self.training and self.gradient_checkpointing:
 
                     def create_custom_forward(module, return_dict=None):
@@ -1446,6 +1604,14 @@ class CrossAttnDownBlock2D(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -1465,6 +1631,14 @@ class CrossAttnDownBlock2D(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -1487,8 +1661,8 @@ class CrossAttnDownBlock2D(nn.Module):
                 output_states = output_states + (hidden_states,)
             
         else:
-            blocks = list(zip(self.resnets, self.attentions))
-            for i, (resnet, attn) in enumerate(blocks):
+            blocks = list(zip(self.resnets, self.attentions, self.caption_attentions))
+            for i, (resnet, attn, caption_attn) in enumerate(blocks):
                 if self.training and self.gradient_checkpointing:
 
                     def create_custom_forward(module, return_dict=None):
@@ -1515,11 +1689,27 @@ class CrossAttnDownBlock2D(nn.Module):
                         encoder_attention_mask=encoder_attention_mask,
                         return_dict=False,
                     )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
                 else:
                     hidden_states = resnet(hidden_states, temb)
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -2553,6 +2743,7 @@ class CrossAttnUpBlock2D(nn.Module):
         super().__init__()
         resnets = []
         attentions = []
+        caption_attentions = []
         ## for image cross attention
         self.use_image_cross_attention = use_image_cross_attention
         if self.use_image_cross_attention:
@@ -2599,6 +2790,20 @@ class CrossAttnUpBlock2D(nn.Module):
                         attention_type=attention_type,
                     )
                 )
+                caption_attentions.append(
+                    Transformer2DModel(
+                        num_attention_heads,
+                        out_channels // num_attention_heads,
+                        in_channels=out_channels,
+                        num_layers=transformer_layers_per_block,
+                        cross_attention_dim=cross_attention_dim,
+                        norm_num_groups=resnet_groups,
+                        use_linear_projection=use_linear_projection,
+                        only_cross_attention=only_cross_attention,
+                        upcast_attention=upcast_attention,
+                        attention_type=attention_type,
+                    )
+                )
             else:
                 attentions.append(
                     DualTransformer2DModel(
@@ -2610,7 +2815,16 @@ class CrossAttnUpBlock2D(nn.Module):
                         norm_num_groups=resnet_groups,
                     )
                 )
-
+                caption_attentions.append(
+                    DualTransformer2DModel(
+                        num_attention_heads,
+                        out_channels // num_attention_heads,
+                        in_channels=out_channels,
+                        num_layers=1,
+                        cross_attention_dim=cross_attention_dim,
+                        norm_num_groups=resnet_groups,
+                    )
+                )
             ## for image cross attention
             if self.use_image_cross_attention:
                 image_attentions.append(
@@ -2633,6 +2847,7 @@ class CrossAttnUpBlock2D(nn.Module):
                 msft_up.append(GFM(out_channels, 3, 128))
 
         self.attentions = nn.ModuleList(attentions)
+        self.caption_attentions = nn.ModuleList(caption_attentions)
         self.resnets = nn.ModuleList(resnets)
 
         ## for image cross attention
@@ -2656,6 +2871,7 @@ class CrossAttnUpBlock2D(nn.Module):
         res_hidden_states_tuple: Tuple[torch.FloatTensor, ...],
         temb: Optional[torch.FloatTensor] = None,
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
+        caption_encoder_hidden_states: Optional[torch.FloatTensor] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         upsample_size: Optional[int] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
@@ -2672,7 +2888,7 @@ class CrossAttnUpBlock2D(nn.Module):
             scm = F.interpolate(scm, size=hidden_states.shape[-2:], mode='nearest')
 
         if self.use_image_cross_attention and self.use_msft_up:
-            for resnet, attn, image_attn, msft_up in zip(self.resnets, self.attentions, self.image_attentions, self.msft_up):
+            for resnet, attn, caption_attn,image_attn, msft_up in zip(self.resnets, self.attentions, self.caption_attentions,self.image_attentions, self.msft_up):
                 # pop res hidden states
                 res_hidden_states = res_hidden_states_tuple[-1]
                 res_hidden_states_tuple = res_hidden_states_tuple[:-1]
@@ -2704,6 +2920,14 @@ class CrossAttnUpBlock2D(nn.Module):
                         encoder_attention_mask=encoder_attention_mask,
                         return_dict=False,
                     )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]                    
                     ## for image cross attention
                     hidden_states = image_attn(
                         hidden_states,
@@ -2720,6 +2944,14 @@ class CrossAttnUpBlock2D(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -2737,7 +2969,7 @@ class CrossAttnUpBlock2D(nn.Module):
                     ## for sft
                     hidden_states = msft_up(hidden_states, seg_mask, scm)
         elif not self.use_image_cross_attention and self.use_msft_up:
-            for resnet, attn, msft_up in zip(self.resnets, self.attentions, self.msft_up):
+            for resnet, attn, caption_attn,msft_up in zip(self.resnets, self.attentions, self.caption_attentions,self.msft_up):
                 # pop res hidden states
                 res_hidden_states = res_hidden_states_tuple[-1]
                 res_hidden_states_tuple = res_hidden_states_tuple[:-1]
@@ -2764,6 +2996,14 @@ class CrossAttnUpBlock2D(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -2781,11 +3021,19 @@ class CrossAttnUpBlock2D(nn.Module):
                         encoder_attention_mask=encoder_attention_mask,
                         return_dict=False,
                     )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
                     ## for sft
                     hidden_states = msft_up(hidden_states, seg_mask, scm)
         
         elif self.use_image_cross_attention and not self.use_msft_up:
-            for resnet, attn, image_attn in zip(self.resnets, self.attentions, self.image_attentions):
+            for resnet, attn, caption_attn,image_attn in zip(self.resnets, self.attentions, self.caption_attentions,self.image_attentions):
                 # pop res hidden states
                 res_hidden_states = res_hidden_states_tuple[-1]
                 res_hidden_states_tuple = res_hidden_states_tuple[:-1]
@@ -2812,6 +3060,14 @@ class CrossAttnUpBlock2D(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -2831,6 +3087,14 @@ class CrossAttnUpBlock2D(nn.Module):
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
@@ -2847,7 +3111,7 @@ class CrossAttnUpBlock2D(nn.Module):
                     )[0]
 
         else:
-            for resnet, attn in zip(self.resnets, self.attentions):
+            for resnet, attn ,caption_attn in zip(self.resnets, self.attentions,self.caption_attentions):
                 # pop res hidden states
                 res_hidden_states = res_hidden_states_tuple[-1]
                 res_hidden_states_tuple = res_hidden_states_tuple[:-1]
@@ -2879,11 +3143,27 @@ class CrossAttnUpBlock2D(nn.Module):
                         encoder_attention_mask=encoder_attention_mask,
                         return_dict=False,
                     )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
                 else:
                     hidden_states = resnet(hidden_states, temb)
                     hidden_states = attn(
                         hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        attention_mask=attention_mask,
+                        encoder_attention_mask=encoder_attention_mask,
+                        return_dict=False,
+                    )[0]
+                    hidden_states = caption_attn(
+                        hidden_states,
+                        encoder_hidden_states=caption_encoder_hidden_states,
                         cross_attention_kwargs=cross_attention_kwargs,
                         attention_mask=attention_mask,
                         encoder_attention_mask=encoder_attention_mask,

@@ -66,9 +66,21 @@ class DataLoader(Dataset):
         print(f'The dataset length: {len(self.image_list)}')
 
 
+    def load_caption_embedding(self,image_path):
+        directory, filename = os.path.split(image_path)
+        filename_without_ext = os.path.splitext(filename)[0]
+        npy_path = os.path.join(directory, f'{filename_without_ext}.npy')
+
+        if os.path.exists(npy_path):
+            return np.load(npy_path)
+        else:
+            raise FileNotFoundError(f'Embedding file not found: {npy_path}')
+
     def __getitem__(self, index):
         image = Image.open(self.image_list[index]).convert('RGB')
         image = self.img_preproc(image)
+
+        image_caption_emb = self.load_caption_embedding(self.image_list[index])
         
         # ------------------------ Generate kernels (used in the first degradation) ------------------------ #
         kernel_size = random.choice(self.kernel_range)
@@ -131,7 +143,7 @@ class DataLoader(Dataset):
         kernel2 = torch.FloatTensor(kernel2)
 
         # self.image_list里面存储的好像是HR图像，为什么被叫做lq_path。不过这个参数后面似乎也没用上
-        return_d = {'gt': image, 'kernel1': kernel, 'kernel2': kernel2, 'sinc_kernel': sinc_kernel, 'lq_path': self.image_list[index]}
+        return_d = {'gt': image, 'kernel1': kernel, 'kernel2': kernel2, 'sinc_kernel': sinc_kernel, 'lq_path': self.image_list[index], 'caption_emb' : image_caption_emb}
         return return_d
         
 
