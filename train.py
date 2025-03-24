@@ -87,12 +87,12 @@ from Mask2Former.mask2former import add_maskformer2_config
 from Mask2Former.train_net import Trainer
 from utils.seg_class import ADE20K_150_CATEGORIES
 
-cfg = get_cfg()
-add_deeplab_config(cfg)
-add_maskformer2_config(cfg)
-cfg.merge_from_file("./preset/models/mask2former/config/ade20k-maskformer2_swin_large_IN21k_384_bs16_160k_res640.yaml")
-cfg.MODEL.WEIGHTS = "./preset/models/mask2former/model_final_6b4a3a.pkl"
-cfg.MODEL.MASK_FORMER.TEST.SEMANTIC_ON = True
+seseg_cfg = get_cfg()
+add_deeplab_config(seseg_cfg)
+add_maskformer2_config(seseg_cfg)
+seseg_cfg.merge_from_file("./preset/models/mask2former/semantic-segmentation/config/ade20k-maskformer2_swin_large_IN21k_384_bs16_160k_res640.yaml")
+seseg_cfg.MODEL.WEIGHTS = "./preset/models/mask2former/semantic-segmentation/model_final_6b4a3a.pkl"
+seseg_cfg.MODEL.MASK_FORMER.TEST.SEMANTIC_ON = True
 
 ADE20k_COLORS = [k["color"] for k in ADE20K_150_CATEGORIES]
 ADE20k_NAMES = [k["name"] for k in ADE20K_150_CATEGORIES]
@@ -901,8 +901,8 @@ elif accelerator.mixed_precision == "bf16":
     weight_dtype = torch.bfloat16
 
 # create a segmentation model and mask tensor
-seg_model = Trainer.build_model(cfg)
-DetectionCheckpointer(seg_model).load(cfg.MODEL.WEIGHTS)
+seg_model = Trainer.build_model(seseg_cfg)
+DetectionCheckpointer(seg_model).load(seseg_cfg.MODEL.WEIGHTS)
 seg_model.eval().to(accelerator.device)
 masks = torch.zeros((args.train_batch_size, 3, args.resolution, args.resolution)).to(accelerator.device, dtype=weight_dtype)
 
@@ -1038,7 +1038,7 @@ for epoch in range(first_epoch, args.num_train_epochs):
             seg_masks = []
             # create seg masks
             with torch.no_grad():
-                # seg model forward
+                # seg model forward                
                 lr_up_seg = [{'image': (img * 255)} for img in lr_up]
                 labels = seg_model(lr_up_seg)
                 labels = torch.cat([label['sem_seg'].argmax(dim=0).unsqueeze(0) for label in labels], dim=0)

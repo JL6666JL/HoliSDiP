@@ -388,6 +388,8 @@ class StableDiffusionControlNetPipeline(DiffusionPipeline, TextualInversionLoade
         prompt_embeds = prompt_embeds.to(dtype=self.text_encoder.dtype, device=device)
 
         bs_embed, seq_len, _ = prompt_embeds.shape
+
+        # 默认num_images_per_prompt是1，这两行属于白捣鼓
         # duplicate text embeddings for each generation per prompt, using mps friendly method
         prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
         prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
@@ -437,6 +439,7 @@ class StableDiffusionControlNetPipeline(DiffusionPipeline, TextualInversionLoade
             )
             negative_prompt_embeds = negative_prompt_embeds[0]
 
+        # None
         if do_classifier_free_guidance:
             # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
             seq_len = negative_prompt_embeds.shape[1]
@@ -796,6 +799,7 @@ class StableDiffusionControlNetPipeline(DiffusionPipeline, TextualInversionLoade
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         latents: Optional[torch.FloatTensor] = None,
         prompt_embeds: Optional[torch.FloatTensor] = None,
+        caption_embeds: Optional[torch.FloatTensor] = None,
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
@@ -1035,6 +1039,7 @@ class StableDiffusionControlNetPipeline(DiffusionPipeline, TextualInversionLoade
                         controlnet_latent_model_input,
                         t,
                         encoder_hidden_states=controlnet_prompt_embeds,
+                        caption_encoder_hidden_states=caption_embeds,
                         controlnet_cond=image[:1],
                         conditioning_scale=conditioning_scale,
                         guess_mode=guess_mode,
@@ -1057,6 +1062,7 @@ class StableDiffusionControlNetPipeline(DiffusionPipeline, TextualInversionLoade
                         latent_model_input,
                         t,
                         encoder_hidden_states=prompt_embeds,
+                        caption_encoder_hidden_states=caption_embeds,
                         cross_attention_kwargs=cross_attention_kwargs,
                         down_block_additional_residuals=down_block_res_samples,
                         mid_block_additional_residual=mid_block_res_sample,
@@ -1143,6 +1149,7 @@ class StableDiffusionControlNetPipeline(DiffusionPipeline, TextualInversionLoade
                                     input_list_t,
                                     t,
                                     encoder_hidden_states=prompt_embeds,
+                                    caption_encoder_hidden_states=caption_embeds,
                                     cross_attention_kwargs=cross_attention_kwargs,
                                     down_block_additional_residuals=down_block_res_samples,
                                     mid_block_additional_residual=mid_block_res_sample,

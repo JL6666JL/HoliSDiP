@@ -52,6 +52,7 @@ from Mask2Former.mask2former import add_maskformer2_config
 from utils.seg_class import ADE20K_150_CATEGORIES
 
 from tqdm.auto import tqdm
+from transformers import AutoProcessor, Blip2ForConditionalGeneration
 
 cfg = get_cfg()
 add_deeplab_config(cfg)
@@ -214,6 +215,10 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
 
         scm_list[i] = pipeline.text_encoder(class_token.input_ids.to(accelerator.device))[0].squeeze(0).view(-1)
     print(f"Finished building CLIP embeddings for ADE20k categories")
+
+    caption_processor = AutoProcessor.from_pretrained("Salesforce/blip2-opt-2.7b")
+    caption_model = Blip2ForConditionalGeneration.from_pretrained("Salesforce/blip2-opt-2.7b")
+    caption_model.to(accelerator.device, dtype=torch.float16)
  
     if accelerator.is_main_process:
         generator = torch.Generator(device=accelerator.device)
@@ -235,6 +240,20 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
             print(f'================== process {image_idx} imgs... ===================')
             validation_image = Image.open(image_name).convert("RGB")
 
+            prompt = "Question: Please describe the contents in the photo in details. Answer:"
+            caption_inputs = caption_processor(validation_image, text=prompt, return_tensors="pt").to(accelerator.device, torch.float16)
+            generated_ids = caption_model.generate(**caption_inputs, max_new_tokens=20)
+            generated_text = caption_processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+            caption = generated_text.lower().replace('.', ',').rstrip(',')
+            caption_token = pipeline.tokenizer(
+                caption,
+                return_tensors="pt",
+                padding="max_length",
+                max_length=pipeline.tokenizer.model_max_length,
+                truncation=True                ).to(accelerator.device)
+            caption_embeddings = pipeline.text_encoder(input_ids=caption_token.input_ids, 
+                                                       attention_mask=caption_token.attention_mask).last_hidden_state
+            
             _, ram_encoder_hidden_states = get_validation_prompt(args, validation_image, model)
 
             ori_width, ori_height = validation_image.size
@@ -301,6 +320,7 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
             validation_prompt += args.added_prompt # clean, extremely detailed, best quality, sharp, clean
             negative_prompt = args.negative_prompt #dirty, messy, low quality, frames, deformed, 
 
+
             if args.save_prompts:
                 txt_save_path = f"{txt_path}/{os.path.basename(image_name).split('.')[0]}.txt"
                 file = open(txt_save_path, "w")
@@ -310,7 +330,7 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
 
             with torch.autocast("cuda"):
                 image = pipeline(
-                        validation_prompt, validation_image, seg_mask=seg_mask, scm=scm, num_inference_steps=args.num_inference_steps, generator=generator, height=height, width=width,
+                        validation_prompt, validation_image, caption_embeds=caption_embeddings, seg_mask=seg_mask, scm=scm, num_inference_steps=args.num_inference_steps, generator=generator, height=height, width=width,
                         guidance_scale=args.guidance_scale, negative_prompt=negative_prompt, conditioning_scale=args.conditioning_scale,
                         start_point=args.start_point, ram_encoder_hidden_states=ram_encoder_hidden_states,
                         latent_tiled_size=args.latent_tiled_size, latent_tiled_overlap=args.latent_tiled_overlap,

@@ -24,15 +24,15 @@ def calculate_metrics(hr_img, sr_img, lpips_model):
     return psnr_value, ssim_value, lpips_value
 
 def main():
-    hr_dir = "/data2/jianglei/dataset/HoliSDiP/StableSR_testsets/DIV2K_V2_val/gt"
-    sr_dir = "/data2/jianglei/HoliSDiP/results/fuxian/samples"
-    save_path = "sr_evaluation_fuxian.xlsx"
+    hr_dir = "/data1/jianglei/work/dataset/HoliSDiP/StableSR_testsets/DIV2K_V2_val/gt"
+    sr_dir = "/data1/jianglei/work/HoliSDiP/result_230000/samples"
+    save_path = "sr_evaluation_add_global_caption_230000.xlsx"
     
     lpips_model = lpips.LPIPS(net='alex').cuda()
     
     psnr_list, ssim_list, lpips_list = [], [], []
     
-    filenames = sorted(os.listdir(hr_dir))[:100]  # 只取前100张图片
+    filenames = sorted(os.listdir(hr_dir))
     
     for filename in filenames:
         hr_path = os.path.join(hr_dir, filename)

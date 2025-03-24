@@ -9,12 +9,14 @@ tmp/*
 tmp*
 .vscode*
 *.sh
+*.xlsx
 preset/models
 detectron2/
 Mask2Former/
 fuxian_bs16/
 results_bs16/
 results_bs32/
+results/
 # any __pycache__ folder
 __pycache__/
 

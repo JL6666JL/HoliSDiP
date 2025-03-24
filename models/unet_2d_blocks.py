@@ -1371,7 +1371,7 @@ class CrossAttnDownBlock2D(nn.Module):
                         attention_type=attention_type,
                     )
                 )
-            ## for sft
+            ## for sft True
             if self.use_msft_down:
                 msft_down.append(GFM(out_channels, 3, 128))
 

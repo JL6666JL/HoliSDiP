@@ -67,6 +67,7 @@ class GFM(nn.Module):
         self.text_sft = SAFT(input_nc, text_nc)
 
     def forward(self, input_feat, seg_mask, scm):
+
         # Normalize the input feature
         input_feat_normalized = self.param_free_norm(input_feat)
         
@@ -78,7 +79,7 @@ class GFM(nn.Module):
 
         # Sum the outputs from both Image and Text SAFT blocks
         fused_output = image_sft_out + text_sft_out
-
+        
         return fused_output
 
 
