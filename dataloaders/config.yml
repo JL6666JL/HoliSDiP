@@ -1,5 +1,7 @@
 # gt_path: ['/data2/jianglei/dataset/HoliSDiP/LSDIR','/data2/jianglei/dataset/HoliSDiP/FFHQ']
 gt_path: ['/data1/jianglei/work/dataset/HoliSDiP/LSDIR','/data1/jianglei/work/dataset/HoliSDiP/FFHQ']
+# gt_path: ["/data1/jianglei/work/dataset/HoliSDiP/test_dataset"]
+seg_description_emb_path: '/data2/jianglei/dataset/FFHQ_LSDIR/local_descriptions'
 gt_size: 512
 
 scale: 4

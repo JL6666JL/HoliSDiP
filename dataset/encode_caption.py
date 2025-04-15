@@ -3,6 +3,7 @@ from transformers import AutoTokenizer, PretrainedConfig
 import numpy as np
 from tqdm.auto import tqdm
 import json
+import os
 
 def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: str, revision: str):
     text_encoder_config = PretrainedConfig.from_pretrained(
@@ -22,15 +23,15 @@ def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: st
         raise ValueError(f"{model_class} is not supported.")
 
 # 文件路径
-captions_path = '/data2/jianglei/dataset/HoliSDiP/captions.json'
-embeddings_path = '/data2/jianglei/dataset/HoliSDiP/captions_embeddings.npy'
+captions_path = '/data1/jianglei/work/dataset/HoliSDiP/descriptions.json'
+embeddings_path = '/data1/jianglei/work/dataset/HoliSDiP/descriptions_embeddings.npy'
 
 # 加载caption
 with open(captions_path, 'r') as file:
     captions = json.load(file)
 
 # 模型和tokenizer
-pretrained_model_name_or_path = "/data2/jianglei/HoliSDiP/preset/models/stable-diffusion-2-base"
+pretrained_model_name_or_path = "/data1/jianglei/work/HoliSDiP/preset/models/stable-diffusion-2-base"
 revision = None
 
 tokenizer = AutoTokenizer.from_pretrained(
@@ -46,14 +47,15 @@ text_encoder = text_encoder_cls.from_pretrained(
 )
 
 # 将模型移动到GPU
-device = torch.device("cuda:6" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 text_encoder.to(device)
 
 # 批量处理
 batch_size = 512  # 根据GPU内存调整
 filenames = list(captions.keys())
 caption_list = list(captions.values())
-embeddings = {}
+# embeddings = {}
+npy_num = 0
 
 for i in tqdm(range(0, len(caption_list), batch_size), desc="Processing captions"):
     batch_captions = caption_list[i:i + batch_size]
@@ -81,8 +83,14 @@ for i in tqdm(range(0, len(caption_list), batch_size), desc="Processing captions
     # 将embedding移回CPU并保存结果
     batch_embeddings = batch_embeddings.cpu()
     for filename, embedding in zip(batch_filenames, batch_embeddings):
-        embeddings[filename] = embedding.numpy()
+        # embeddings[filename] = embedding.numpy()
+        directory, imagename = os.path.split(filename)
+        imagename_without_ext = os.path.splitext(imagename)[0]
+        npy_path = os.path.join(directory, f'{imagename_without_ext}.npy')
+        np.save(npy_path, embedding)
+        npy_num += 1
 
-print(f'embedding 数量:{len(embeddings)}')
-# 保存embedding
-np.save(embeddings_path, embeddings)
+print(f'embedding 数量:{npy_num}')
+print("所有npy文件已经存储完毕")
+# # 保存embedding
+# np.save(embeddings_path, embeddings)

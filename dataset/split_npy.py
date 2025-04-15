@@ -3,7 +3,7 @@ import os
 from tqdm import tqdm
 
 # 读取.npy文件
-embeddings_path = '/data2/jianglei/dataset/HoliSDiP/captions_embeddings.npy'
+embeddings_path = '/data1/jianglei/work/dataset/HoliSDiP/descriptions_embeddings.npy'
 embeddings = np.load(embeddings_path, allow_pickle=True).item()
 
 # 保存每个caption的embedding到对应图片路径

@@ -14,6 +14,8 @@ from basicsr.data.transforms import augment
 from basicsr.utils import FileClient, get_root_logger, imfrombytes, img2tensor
 
 from PIL import Image
+import pickle
+from torchvision.utils import save_image
 
 class DataLoader(Dataset):
     def __init__(self, opt, fix_size=512): 
@@ -65,6 +67,9 @@ class DataLoader(Dataset):
 
         print(f'The dataset length: {len(self.image_list)}')
 
+        # self.seg_description_emb_path = "/data2/jianglei/dataset/HoliSDiP/local_descriptions"
+        self.seg_description_emb_path = opt['seg_description_emb_path']
+
 
     def load_caption_embedding(self,image_path):
         directory, filename = os.path.split(image_path)
@@ -75,13 +80,81 @@ class DataLoader(Dataset):
             return np.load(npy_path)
         else:
             raise FileNotFoundError(f'Embedding file not found: {npy_path}')
+    
+    def load_seg_description_emb(self,image_path):
+        image_name = os.path.splitext(os.path.basename(image_path))[0]
+
+        parent_dir = os.path.dirname(image_path)
+        folder_name = os.path.basename(parent_dir) 
+
+        dataset_name = os.path.basename(os.path.dirname(parent_dir))
+
+        file_name = f"{dataset_name}_{folder_name}_{image_name}_descriptions.pkl"
+        with open(os.path.join(self.seg_description_emb_path,file_name), 'rb') as f:
+            local_descriptions = pickle.load(f)
+        return local_descriptions["panoptic_seg"], local_descriptions["seg_emb_dict"]
+
+    def synchronized_crop_to_tensor(self, image, panoptic_seg, crop_size):
+        """
+        对 PIL.Image 和 numpy.ndarray 同步随机裁剪，并转换为 Tensor
+        Args:
+            image: PIL.Image (RGB)
+            panoptic_seg: numpy.ndarray (H x W)
+            crop_size: 目标裁剪尺寸 (h, w)
+        Returns:
+            image_tensor: torch.Tensor (C x H x W)
+            panoptic_tensor: torch.Tensor (H x W)
+        """
+        # 1. 生成随机裁剪位置
+        width, height = image.size
+        h = crop_size
+        w = crop_size
+        i = np.random.randint(0, height - h + 1) if height > h else 0
+        j = np.random.randint(0, width - w + 1) if width > w else 0
+
+        # 2. 裁剪图像和分割图
+        image_cropped = transforms.functional.crop(image, i, j, h, w)  # PIL.Image
+        panoptic_cropped = panoptic_seg[i:i+h, j:j+w]                   # numpy.ndarray
+
+        # 3. 统一转换为 Tensor
+        image_tensor = transforms.ToTensor()(image_cropped)  # 自动归一化到 [0,1] (C x H x W)
+        panoptic_tensor = torch.from_numpy(panoptic_cropped) # 保持原始值 (H x W)
+
+        return image_tensor, panoptic_tensor
 
     def __getitem__(self, index):
         image = Image.open(self.image_list[index]).convert('RGB')
-        image = self.img_preproc(image)
+        panoptic_seg, seg_emb_dict = self.load_seg_description_emb(self.image_list[index])
+        # image = self.img_preproc(image)
+        image, panoptic_seg = self.synchronized_crop_to_tensor(image, panoptic_seg, self.fix_size)
 
-        image_caption_emb = self.load_caption_embedding(self.image_list[index])
+        # # 检验是否裁剪的是同样的位置
+        # # 定义颜色映射（0-10 分别对应 RGB 颜色）
+        # color_map = {
+        #     0: [0, 0, 0],       # 黑色
+        #     1: [255, 0, 0],     # 红色
+        #     2: [0, 0, 255],     # 蓝色
+        #     3: [0, 255, 0],     # 绿色
+        #     4: [255, 255, 0],   # 黄色
+        #     5: [128, 0, 128],   # 紫色
+        #     6: [255, 165, 0],   # 橙色
+        #     7: [0, 255, 255],   # 青色
+        #     8: [255, 0, 255],   # 品红
+        #     9: [0, 255, 0],     # 绿色（可自定义）
+        #     10: [255, 255, 255] # 白色
+        # }
+        # h,w = panoptic_seg.shape
+        # rgb_image = np.zeros((h, w, 3), dtype=np.uint8)
+        # for val in color_map:
+        #     rgb_image[panoptic_seg == val] = color_map[val]
+        # # print(image.shape,panoptic_seg.shape)
+        # # print(panoptic_seg)
+        # cv2.imwrite("crop_mask.png", cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR))
+        # save_image(image,"crop_image.png")
+        # input("11")
         
+        image_caption_emb = self.load_caption_embedding(self.image_list[index])
+    
         # ------------------------ Generate kernels (used in the first degradation) ------------------------ #
         kernel_size = random.choice(self.kernel_range)
         if np.random.uniform() < self.opt['sinc_prob']:
@@ -143,7 +216,9 @@ class DataLoader(Dataset):
         kernel2 = torch.FloatTensor(kernel2)
 
         # self.image_list里面存储的好像是HR图像，为什么被叫做lq_path。不过这个参数后面似乎也没用上
-        return_d = {'gt': image, 'kernel1': kernel, 'kernel2': kernel2, 'sinc_kernel': sinc_kernel, 'lq_path': self.image_list[index], 'caption_emb' : image_caption_emb}
+        return_d = {'gt': image, 'kernel1': kernel, 'kernel2': kernel2, 'sinc_kernel': sinc_kernel, 
+                    'lq_path': self.image_list[index], 'caption_emb' : image_caption_emb,
+                    "panoptic_seg": panoptic_seg, "seg_emb_dict": seg_emb_dict}
         return return_d
         
 

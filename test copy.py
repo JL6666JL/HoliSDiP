@@ -30,7 +30,7 @@ from ram.models.ram_lora import ram
 from ram import inference_ram as inference
 from ram import get_transform
 
-from models.gfm import SCM_encoder, DCM_encoder
+from models.gfm import SCM_encoder
 
 from typing import Mapping, Any
 from torchvision import transforms
@@ -53,9 +53,6 @@ from utils.seg_class import ADE20K_150_CATEGORIES
 
 from tqdm.auto import tqdm
 from transformers import AutoProcessor, Blip2ForConditionalGeneration
-
-import pickle
-import json
 
 cfg = get_cfg()
 add_deeplab_config(cfg)
@@ -174,24 +171,6 @@ def get_validation_prompt(args, image, model, device='cuda'):
 
     return validation_prompt, ram_encoder_hidden_states
 
-def load_seg_description_emb(args,image_path):
-    image_name = os.path.splitext(os.path.basename(image_path))[0]
-
-    parent_dir = os.path.dirname(image_path)
-    folder_name = os.path.basename(parent_dir) 
-
-    dataset_name = os.path.basename(os.path.dirname(parent_dir))
-
-    file_name = f"{dataset_name}_{folder_name}_{image_name}_descriptions.pkl"
-
-    with open(os.path.join(args.local_des_pkl_path,file_name), 'rb') as f:
-        local_descriptions = pickle.load(f)
-    return local_descriptions["panoptic_seg"], local_descriptions["seg_emb_dict"]
-
-def load_description(args, image_path):
-    print(image_path)
-    input("11")
-
 def main(args, enable_xformers_memory_efficient_attention=True,):
     txt_path = os.path.join(args.output_dir, 'prompts')
     os.makedirs(txt_path, exist_ok=True)
@@ -225,20 +204,16 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
     scm_encoder.load_state_dict(torch.load(os.path.join(args.holisdip_model_path, "scm_encoder.pth")))
     scm_encoder.eval()
 
-    dcm_encoder = DCM_encoder().to(accelerator.device)
-    dcm_encoder.load_state_dict(torch.load(os.path.join(args.holisdip_model_path, "dcm_encoder.pth")))
-    dcm_encoder.eval()
-
     # build the CLIP embedding of ADE20k categories
-    # max_length = 1 # the max length of the clip embedding of the category
-    # scm_dim = max_length*1024
-    # scm_list = torch.zeros(len(ADE20k_NAMES), scm_dim, device=accelerator.device)
-    # for i, name in enumerate(ADE20k_NAMES):
-    #     class_token = pipeline.tokenizer(name, return_tensors="pt")
-    #     class_token.input_ids = class_token.input_ids[0][1].unsqueeze(0) # only take the first token
+    max_length = 1 # the max length of the clip embedding of the category
+    scm_dim = max_length*1024
+    scm_list = torch.zeros(len(ADE20k_NAMES), scm_dim, device=accelerator.device)
+    for i, name in enumerate(ADE20k_NAMES):
+        class_token = pipeline.tokenizer(name, return_tensors="pt")
+        class_token.input_ids = class_token.input_ids[0][1].unsqueeze(0) # only take the first token
 
-    #     scm_list[i] = pipeline.text_encoder(class_token.input_ids.to(accelerator.device))[0].squeeze(0).view(-1)
-    # print(f"Finished building CLIP embeddings for ADE20k categories")
+        scm_list[i] = pipeline.text_encoder(class_token.input_ids.to(accelerator.device))[0].squeeze(0).view(-1)
+    print(f"Finished building CLIP embeddings for ADE20k categories")
 
     # caption_processor = AutoProcessor.from_pretrained("Salesforce/blip2-opt-2.7b")
     # caption_model = Blip2ForConditionalGeneration.from_pretrained("Salesforce/blip2-opt-2.7b")
@@ -253,45 +228,31 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
             image_names = sorted(glob.glob(f'{args.image_path}/*.*'))
         else:
             image_names = [args.image_path]
-        
-        if args.start_index !=-1 and args.end_index != -1:
-            image_names = image_names[args.start_index:args.end_index]
 
         progress_bar = tqdm(
             range(0, len(image_names)),
             initial=0,
             desc="Processing images",
         )
-        with open(args.des_path, 'r') as f:
-            all_des = json.load(f)
 
         for image_idx, image_name in enumerate(image_names[:]):
             print(f'================== process {image_idx} imgs... ===================')
             validation_image = Image.open(image_name).convert("RGB")
-
-            panoptic_seg, seg_emb_dict = load_seg_description_emb(args,image_name)
-
-            ph, pw = panoptic_seg.shape
-            panoptic_seg = cv2.resize(panoptic_seg, (ph*4,pw*4), interpolation=cv2.INTER_NEAREST)
-
-            description = all_des[image_name]
-
-            print(description)
 
             # prompt = "Question: Please describe the contents in the photo in details. Answer:"
             # caption_inputs = caption_processor(validation_image, text=prompt, return_tensors="pt").to(accelerator.device, torch.float16)
             # generated_ids = caption_model.generate(**caption_inputs, max_new_tokens=20)
             # generated_text = caption_processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
             # caption = generated_text.lower().replace('.', ',').rstrip(',')
-            # caption = "this is a test text."
-            description_token = pipeline.tokenizer(
-                description,
+            caption = "this is a test text."
+            caption_token = pipeline.tokenizer(
+                caption,
                 return_tensors="pt",
                 padding="max_length",
                 max_length=pipeline.tokenizer.model_max_length,
                 truncation=True                ).to(accelerator.device)
-            description_embeddings = pipeline.text_encoder(input_ids=description_token.input_ids, 
-                                                       attention_mask=description_token.attention_mask).last_hidden_state
+            caption_embeddings = pipeline.text_encoder(input_ids=caption_token.input_ids, 
+                                                       attention_mask=caption_token.attention_mask).last_hidden_state
             
             _, ram_encoder_hidden_states = get_validation_prompt(args, validation_image, model)
 
@@ -330,32 +291,19 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
 
                 scm = torch.zeros((args.process_size, args.process_size, scm_dim)).to(accelerator.device)
                 seg_mask = torch.zeros((3, args.process_size, args.process_size))
-                # for i in torch.unique(label):
-                #     # build seg mask
-                #     color = ADE20k_COLORS[i]
-                #     seg_mask[0][label == i] = color[0]
-                #     seg_mask[1][label == i] = color[1]
-                #     seg_mask[2][label == i] = color[2]
+                for i in torch.unique(label):
+                    # build seg mask
+                    color = ADE20k_COLORS[i]
+                    seg_mask[0][label == i] = color[0]
+                    seg_mask[1][label == i] = color[1]
+                    seg_mask[2][label == i] = color[2]
 
-                #     # build scm 
-                #     scm[label == i] = scm_list[i]
+                    # build scm 
+                    scm[label == i] = scm_list[i]
 
-                #     # build text prompts
-                #     name = ADE20k_NAMES[i]
-                #     validation_prompt += f"{name}, "
-
-                panoptic_seg = torch.from_numpy(panoptic_seg)
-                for i in torch.unique(panoptic_seg):
-                    cur = int(i)
-                    color = seg_emb_dict[cur]["color"]
-                    seg_mask[0][panoptic_seg == i] = color[0]
-                    seg_mask[1][panoptic_seg == i] = color[1]
-                    seg_mask[2][panoptic_seg == i] = color[2]
-
-                    dcm_emb = dcm_encoder(seg_emb_dict[cur]["emb"].to(accelerator.device))
-                    scm[panoptic_seg == i] =dcm_emb
-                    now_label = seg_emb_dict[cur]["label"]
-                    validation_prompt += f"{now_label}, "
+                    # build text prompts
+                    name = ADE20k_NAMES[i]
+                    validation_prompt += f"{name}, "
 
                 scm = scm.permute(2, 0, 1).unsqueeze(0)
                 scm = scm_encoder(scm).to(accelerator.device)
@@ -382,7 +330,7 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
 
             with torch.autocast("cuda"):
                 image = pipeline(
-                        validation_prompt, validation_image, caption_embeds=description_embeddings, seg_mask=seg_mask, scm=scm, num_inference_steps=args.num_inference_steps, generator=generator, height=height, width=width,
+                        validation_prompt, validation_image, caption_embeds=caption_embeddings, seg_mask=seg_mask, scm=scm, num_inference_steps=args.num_inference_steps, generator=generator, height=height, width=width,
                         guidance_scale=args.guidance_scale, negative_prompt=negative_prompt, conditioning_scale=args.conditioning_scale,
                         start_point=args.start_point, ram_encoder_hidden_states=ram_encoder_hidden_states,
                         latent_tiled_size=args.latent_tiled_size, latent_tiled_overlap=args.latent_tiled_overlap,
@@ -431,10 +379,6 @@ if __name__ == "__main__":
     parser.add_argument("--start_steps", type=int, default=999) # defaults set to 999.
     parser.add_argument("--start_point", type=str, choices=['lr', 'noise'], default='lr') # LR Embedding Strategy, choose 'lr latent + 999 steps noise' as diffusion start point. 
     parser.add_argument("--save_prompts", action='store_true')
-    parser.add_argument("--local_des_pkl_path", type=str, default=None)
-    parser.add_argument("--des_path", type=str, default=None)
-    parser.add_argument("--start_index", type=int, default=-1)
-    parser.add_argument("--end_index", type=int, default=-1)
     args = parser.parse_args()
     main(args)
 

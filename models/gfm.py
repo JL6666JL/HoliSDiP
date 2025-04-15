@@ -100,3 +100,17 @@ class SCM_encoder(nn.Module):
         x = self.conv3(x)
 
         return x
+
+# descripton-CLIP MAP
+class DCM_encoder(nn.Module):
+    def __init__(self, input_nc=78848, output_nc=1024):
+        super().__init__()
+        hidden_nc = 4096
+        self.encoder = nn.Sequential(
+            nn.Linear(input_nc, hidden_nc),
+            nn.ReLU(),
+            nn.Linear(hidden_nc, output_nc)  # 最终维度 1024
+        )
+    
+    def forward(self, x):
+        return self.encoder(x)

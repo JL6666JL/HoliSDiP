@@ -36,7 +36,7 @@ from diffusers import (
 )
 from models.controlnet import ControlNetModel
 from models.unet_2d_condition import UNet2DConditionModel
-from models.gfm import SCM_encoder
+from models.gfm import SCM_encoder, DCM_encoder
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
@@ -51,6 +51,7 @@ import torch.nn.functional as F
 
 from omegaconf import OmegaConf
 from ram import inference_ram as inference
+from torch.utils.data._utils.collate import default_collate
 
 if is_wandb_available():
     import wandb
@@ -856,6 +857,27 @@ optimizer = optimizer_class(
     eps=args.adam_epsilon,
 )
 
+def custom_collate(batch):
+    """
+    自定义 collate_fn，处理 seg_emb_dict 键不一致的情况。
+    输入：batch (list of dicts，每个 dict 是 __getitem__ 的返回值)
+    输出：合并后的 batch (dict)
+    """
+    collated = {}
+    
+    # 1. 合并常规字段（直接用 default_collate）
+    regular_keys = ['gt', 'kernel1', 'kernel2', 'sinc_kernel', 'caption_emb', 'panoptic_seg']
+    for key in regular_keys:
+        collated[key] = default_collate([item[key] for item in batch])
+
+    # 2. 处理无需合并的字段（如文件路径）
+    collated['lq_path'] = [item['lq_path'] for item in batch]  # 保持为列表
+
+    # 3. 特殊处理 seg_emb_dict（保留原始字典列表）
+    collated['seg_emb_dict'] = [item['seg_emb_dict'] for item in batch]
+
+    return collated
+
 opt = OmegaConf.load(args.data_loader_config)
 train_dataset = DataLoader(opt)
 
@@ -864,7 +886,8 @@ train_dataloader = torch.utils.data.DataLoader(
     num_workers=args.dataloader_num_workers,
     batch_size=args.train_batch_size,
     shuffle=True,
-    drop_last=True
+    drop_last=True,
+    collate_fn=custom_collate  
 )
 
 realesrgan_degradation = RealesrganDegradation(args_degradation=opt)
@@ -922,6 +945,7 @@ args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_ep
 max_length = 1 # the max length of the clip embedding of the category
 scm_dim = max_length*1024
 scm_list = torch.zeros(len(ADE20k_NAMES), scm_dim, device=accelerator.device)
+# scm_init = torch.zeros((args.train_batch_size, args.resolution, args.resolution, scm_dim)).to(accelerator.device)
 scm_init = torch.zeros((args.train_batch_size, args.resolution, args.resolution, scm_dim)).to(accelerator.device)
 mask_init = torch.zeros((args.train_batch_size, 3, args.resolution, args.resolution)).to(accelerator.device)
 for i, name in enumerate(ADE20k_NAMES):
@@ -933,12 +957,18 @@ for i, name in enumerate(ADE20k_NAMES):
 print(f"Finished building CLIP embeddings for ADE20k categories")
 
 scm_encoder = SCM_encoder(input_nc=scm_dim)
-if args.resume_from_checkpoint is not None:
-    logger.info("Loading scm_encoder weights")
-    scm_encoder.load_state_dict(torch.load(os.path.join(args.output_dir, "scm_encoder.pth")))
-else:
-    logger.info("Initializing scm_encoder weights")
-scm_encoder.to(accelerator.device, dtype=weight_dtype)
+dcm_encoder = DCM_encoder()
+# if args.resume_from_checkpoint is not None:
+#     logger.info("Loading scm_encoder weights")
+#     scm_encoder.load_state_dict(torch.load(os.path.join(args.output_dir, "scm_encoder.pth")))
+#     logger.info("Loading dcm_encoder weights")
+#     dcm_encoder.load_state_dict(torch.load(os.path.join(args.output_dir, "dcm_encoder.pth")))
+# else:
+#     logger.info("Initializing scm_encoder weights")
+#     logger.info("Initializing dcm_encoder weights")
+
+# scm_encoder.to(accelerator.device, dtype=weight_dtype)
+# dcm_encoder.to(accelerator.device, dtype=weight_dtype)
 
 # We need to initialize the trackers we use, and also store our configuration.
 # The trackers initializes automatically on the main process.
@@ -986,6 +1016,12 @@ if args.resume_from_checkpoint:
         initial_global_step = 0
     else:
         accelerator.print(f"Resuming from checkpoint {path}")
+
+        logger.info("Loading scm_encoder weights")
+        scm_encoder.load_state_dict(torch.load(os.path.join(args.output_dir, path,"scm_encoder.pth")))
+        logger.info("Loading dcm_encoder weights")
+        dcm_encoder.load_state_dict(torch.load(os.path.join(args.output_dir, path,"dcm_encoder.pth")))
+        
         accelerator.load_state(os.path.join(args.output_dir, path))
         global_step = int(path.split("-")[1])
 
@@ -993,6 +1029,9 @@ if args.resume_from_checkpoint:
         first_epoch = global_step // num_update_steps_per_epoch
 else:
     initial_global_step = 0
+
+scm_encoder.to(accelerator.device, dtype=weight_dtype)
+dcm_encoder.to(accelerator.device, dtype=weight_dtype)
 
 progress_bar = tqdm(
     range(0, args.max_train_steps),
@@ -1009,6 +1048,9 @@ for epoch in range(first_epoch, args.num_train_epochs):
         lr_batch, hr_batch = realesrgan_degradation(batch)
         lr_batch = lr_batch.to(accelerator.device, dtype=weight_dtype)
         hr_batch = hr_batch.to(accelerator.device, dtype=weight_dtype)
+
+        panoptic_seg_batch = batch['panoptic_seg']
+        seg_emb_dict_batch = batch['seg_emb_dict']
 
         with accelerator.accumulate(controlnet), accelerator.accumulate(unet):
             # pixel_values = hr_batch.to(accelerator.device, dtype=weight_dtype)
@@ -1037,47 +1079,84 @@ for epoch in range(first_epoch, args.num_train_epochs):
             seg_labels = []
             seg_masks = []
             # create seg masks
-            with torch.no_grad():
-                # seg model forward                
-                lr_up_seg = [{'image': (img * 255)} for img in lr_up]
-                labels = seg_model(lr_up_seg)
-                labels = torch.cat([label['sem_seg'].argmax(dim=0).unsqueeze(0) for label in labels], dim=0)
+            # with torch.no_grad():
+            #     # seg model forward                
+            #     lr_up_seg = [{'image': (img * 255)} for img in lr_up]
+            #     labels = seg_model(lr_up_seg)
+            #     labels = torch.cat([label['sem_seg'].argmax(dim=0).unsqueeze(0) for label in labels], dim=0)
 
-                # fill labels with color
-                for idx, label in enumerate(labels):
-                    scm = scm_init[idx]
-                    m = mask_init[idx]
-                    assert torch.all(scm == 0)
-                    assert torch.all(m == 0)
+            #     # fill labels with color
+            #     for idx, label in enumerate(labels):
+            #         scm = scm_init[idx]
+            #         m = mask_init[idx]
+            #         assert torch.all(scm == 0)
+            #         assert torch.all(m == 0)
 
-                    seg_label = ''
-                    for i in torch.unique(label):
-                        # build seg mask
-                        color = ADE20k_COLORS[i]
-                        m[0][label == i] = color[0]
-                        m[1][label == i] = color[1]
-                        m[2][label == i] = color[2]
+            #         seg_label = ''
+            #         for i in torch.unique(label):
+            #             # build seg mask
+            #             color = ADE20k_COLORS[i]
+            #             m[0][label == i] = color[0]
+            #             m[1][label == i] = color[1]
+            #             m[2][label == i] = color[2]
                         
-                        # build SCMap
-                        scm[label == i] = scm_list[i]
+            #             # build SCMap
+            #             scm[label == i] = scm_list[i]
 
-                        # build text prompt with semantic segmentation labels
-                        name = ADE20k_NAMES[i]
-                        seg_label += f"{name}, "
-                        assert not torch.all(scm == 0)
-                        assert not torch.all(m == 0)
+            #             # build text prompt with semantic segmentation labels
+            #             name = ADE20k_NAMES[i]
+            #             seg_label += f"{name}, "
+            #             assert not torch.all(scm == 0)
+            #             assert not torch.all(m == 0)
 
-                    # random drop text prompt during training
-                    if random.random() < args.null_text_ratio:
-                        seg_label = ''
+            #         # random drop text prompt during training
+            #         if random.random() < args.null_text_ratio:
+            #             seg_label = ''
 
-                    seg_labels.append(seg_label[:-2]) # remove the last comma and space, then append to seg_labels
-                    scm_batch.append(scm.permute(2, 0, 1).unsqueeze(0))
-                    seg_masks.append(m.unsqueeze(0))
-                scm_batch = torch.cat(scm_batch, dim=0).to(accelerator.device, dtype=weight_dtype)
-                seg_masks = torch.cat(seg_masks, dim=0)
-                seg_masks = (seg_masks / 255.0).to(accelerator.device, dtype=weight_dtype)
+            #         seg_labels.append(seg_label[:-2]) # remove the last comma and space, then append to seg_labels
+            #         scm_batch.append(scm.permute(2, 0, 1).unsqueeze(0))
+            #         seg_masks.append(m.unsqueeze(0))
 
+            #     scm_batch = torch.cat(scm_batch, dim=0).to(accelerator.device, dtype=weight_dtype)
+            #     seg_masks = torch.cat(seg_masks, dim=0)
+            #     seg_masks = (seg_masks / 255.0).to(accelerator.device, dtype=weight_dtype)
+
+            for idx, panoptic_seg in enumerate(panoptic_seg_batch):
+                scm = scm_init[idx].to(accelerator.device, dtype=weight_dtype)
+                m = mask_init[idx]
+                assert torch.all(scm == 0)
+                assert torch.all(m == 0)
+
+                seg_label = ''
+                for i in torch.unique(panoptic_seg):
+                    cur = int(i)
+
+                    color = seg_emb_dict_batch[idx][cur]["color"]
+                    m[0][panoptic_seg == i] = color[0]
+                    m[1][panoptic_seg == i] = color[1]
+                    m[2][panoptic_seg == i] = color[2]
+
+                    dcm_emb = dcm_encoder(seg_emb_dict_batch[idx][cur]["emb"].to(accelerator.device, dtype=weight_dtype))
+
+                    scm[panoptic_seg == i] = dcm_emb
+                    now_label = seg_emb_dict_batch[idx][cur]["label"]
+                    seg_label += f"{now_label}, "
+                    
+                    assert not torch.all(scm == 0)
+                    assert not torch.all(m == 0)
+
+                if random.random() < args.null_text_ratio:
+                    seg_label = ''
+
+                seg_labels.append(seg_label[:-2]) # remove the last comma and space, then append to seg_labels
+                scm_batch.append(scm.permute(2, 0, 1).unsqueeze(0))
+                seg_masks.append(m.unsqueeze(0))
+
+            scm_batch = torch.cat(scm_batch, dim=0).to(accelerator.device, dtype=weight_dtype)
+            seg_masks = torch.cat(seg_masks, dim=0)
+            seg_masks = (seg_masks / 255.0).to(accelerator.device, dtype=weight_dtype) 
+
+        
             accelerator.wait_for_everyone()
 
             # embed the scm_batch as a shared feature of MSFT layers
@@ -1157,6 +1236,8 @@ for epoch in range(first_epoch, args.num_train_epochs):
                     # save scm_encoder
                     scm_encoder_path = os.path.join(args.output_dir, f"checkpoint-{global_step}", f"scm_encoder.pth")
                     torch.save(scm_encoder.state_dict(), scm_encoder_path)
+                    dcm_encoder_path = os.path.join(args.output_dir, f"checkpoint-{global_step}", f"dcm_encoder.pth")
+                    torch.save(dcm_encoder.state_dict(), dcm_encoder_path)
 
                 # if args.validation_prompt is not None and global_step % args.validation_steps == 0:
                 if False:
