@@ -57,16 +57,16 @@ from transformers import AutoProcessor, Blip2ForConditionalGeneration
 import pickle
 import json
 
-cfg = get_cfg()
-add_deeplab_config(cfg)
-add_maskformer2_config(cfg)
-cfg.merge_from_file("/data1/jianglei/work/HoliSDiP/preset/models/mask2former/semantic-segmentation/config/ade20k-maskformer2_swin_large_IN21k_384_bs16_160k_res640.yaml")
-cfg.MODEL.WEIGHTS = "/data1/jianglei/work/HoliSDiP/preset/models/mask2former/semantic-segmentation/model_final_6b4a3a.pkl"
-cfg.MODEL.MASK_FORMER.TEST.SEMANTIC_ON = True
-predictor = DefaultPredictor(cfg)
+# cfg = get_cfg()
+# add_deeplab_config(cfg)
+# add_maskformer2_config(cfg)
+# cfg.merge_from_file("/data1/jianglei/work/HoliSDiP/preset/models/mask2former/semantic-segmentation/config/ade20k-maskformer2_swin_large_IN21k_384_bs16_160k_res640.yaml")
+# cfg.MODEL.WEIGHTS = "/data1/jianglei/work/HoliSDiP/preset/models/mask2former/semantic-segmentation/model_final_6b4a3a.pkl"
+# cfg.MODEL.MASK_FORMER.TEST.SEMANTIC_ON = True
+# predictor = DefaultPredictor(cfg)
 
-ADE20k_COLORS = [k["color"] for k in ADE20K_150_CATEGORIES]
-ADE20k_NAMES = [k["name"] for k in ADE20K_150_CATEGORIES]
+# ADE20k_COLORS = [k["color"] for k in ADE20K_150_CATEGORIES]
+# ADE20k_NAMES = [k["name"] for k in ADE20K_150_CATEGORIES]
 ######################################################
 
 logger = get_logger(__name__, log_level="INFO")
@@ -320,13 +320,13 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
             
             # get mask from Mask2Former and save it along with the image
             with torch.no_grad():
-                outputs = predictor(validation_image_cv2)
-                label = outputs["sem_seg"].argmax(dim=0).to("cpu")
-                v = Visualizer(validation_image_cv2[:, :, ::-1], ade20k_metadata, scale=1.2, instance_mode=ColorMode.IMAGE_BW)
-                semantic_result = v.draw_sem_seg(label).get_image()
-                semantic_result = cv2.cvtColor(semantic_result, cv2.COLOR_BGR2RGB)
-                semantic_result = Image.fromarray(semantic_result)
-                semantic_result.save(f'{args.output_dir}/masks_meta/{os.path.basename(image_name)}')
+                # outputs = predictor(validation_image_cv2)
+                # label = outputs["sem_seg"].argmax(dim=0).to("cpu")
+                # v = Visualizer(validation_image_cv2[:, :, ::-1], ade20k_metadata, scale=1.2, instance_mode=ColorMode.IMAGE_BW)
+                # semantic_result = v.draw_sem_seg(label).get_image()
+                # semantic_result = cv2.cvtColor(semantic_result, cv2.COLOR_BGR2RGB)
+                # semantic_result = Image.fromarray(semantic_result)
+                # semantic_result.save(f'{args.output_dir}/masks_meta/{os.path.basename(image_name)}')
 
                 scm = torch.zeros((args.process_size, args.process_size, scm_dim)).to(accelerator.device)
                 seg_mask = torch.zeros((3, args.process_size, args.process_size))
@@ -352,7 +352,17 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
                     seg_mask[1][panoptic_seg == i] = color[1]
                     seg_mask[2][panoptic_seg == i] = color[2]
 
-                    dcm_emb = dcm_encoder(seg_emb_dict[cur]["emb"].to(accelerator.device))
+                    binary_mask = (panoptic_seg == i)
+                    binary_mask_3ch = binary_mask.unsqueeze(0).repeat(3,1,1)
+                    validation_image_tensor = transforms.ToTensor()(validation_image)
+                    now_seg_lr_up = validation_image_tensor * binary_mask_3ch
+                    now_seg_lr_up = now_seg_lr_up.unsqueeze(0).to(accelerator.device)
+                    with torch.no_grad():
+                        now_seg_lr_up_ram = ram_transforms(now_seg_lr_up)
+                        seg_lr_up_ram_hidden_embedding = model.generate_image_embeds(now_seg_lr_up_ram).squeeze(0)
+
+                
+                    dcm_emb = dcm_encoder(seg_lr_up_ram_hidden_embedding,seg_emb_dict[cur]["emb"].to(accelerator.device).view(-1,1024))
                     scm[panoptic_seg == i] =dcm_emb
                     now_label = seg_emb_dict[cur]["label"]
                     validation_prompt += f"{now_label}, "

@@ -5,6 +5,7 @@ import cv2
 import pandas as pd
 import numpy as np
 from torchvision import transforms
+import argparse
 
 def load_image(path):
     """加载图像并转换为 PyTorch 张量 (1, C, H, W)"""
@@ -32,10 +33,13 @@ def calculate_metrics(hr_img, sr_img, metrics_dict):
 
     return psnr_value, ssim_value, lpips_value, musiq_value, maniqa_value, clipiqa_value
 
-def main():
+def main(args):
+
     hr_dir = "/data1/jianglei/work/dataset/HoliSDiP/StableSR_testsets/DIV2K_V2_val/gt"
-    sr_dir = "/data1/jianglei/work/HoliSDiP/results/add_global_local_des_290000/samples"
-    save_path = "sr_evaluation_add_global_local_des_290000.xlsx"
+    # sr_dir = "/data1/jianglei/work/HoliSDiP/results/add_global_local_des_290000/samples"
+    sr_dir = os.path.join(args.sr_dir,"samples")
+    save_path = "/data2/jianglei/HoliSDiP/results/add_global_local_des~LGQS__keeppos_results.xlsx"
+    # save_path = "sr_evaluation_add_global_local_des_290000.xlsx"
 
     # 创建 `pyiqa` 评估器
     metrics_dict = {
@@ -74,6 +78,7 @@ def main():
             print("SR路径不存在!")
 
     avg_metrics = {
+        "steps" : args.steps,
         "PSNR": np.mean(psnr_list),
         "SSIM": np.mean(ssim_list),
         "LPIPS": np.mean(lpips_list),
@@ -83,11 +88,17 @@ def main():
     }
 
     df = pd.DataFrame([avg_metrics])
+
+    if os.path.exists(save_path):
+        old_df = pd.read_excel(save_path)
+        df = pd.concat([old_df, df], ignore_index=True)
+
     df.to_excel(save_path, index=False)
 
-    print("\n=== 评估完成，平均指标如下 ===")
-    for k, v in avg_metrics.items():
-        print(f"{k}: {v:.4f}")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sr_dir", type=str, default=None)
+    parser.add_argument("--steps", type=str, default=None)
+    args = parser.parse_args()
+    main(args)

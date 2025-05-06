@@ -102,38 +102,15 @@ class SCM_encoder(nn.Module):
         return x
 
 # descripton-CLIP MAP
-# 添加了选取前topk个最相似的text token
 class DCM_encoder(nn.Module):
-    def __init__(self, input_nc=78848, output_nc=1024,
-                 d_model=256, d_image=512, d_text=1024,
-                 topk=50):
+    def __init__(self, input_nc=78848, output_nc=1024):
         super().__init__()
         hidden_nc = 4096
-        input_nc = topk * d_model
         self.encoder = nn.Sequential(
             nn.Linear(input_nc, hidden_nc),
             nn.ReLU(),
             nn.Linear(hidden_nc, output_nc)  # 最终维度 1024
         )
-        self.proj_image = nn.Linear(d_image, d_model)
-        self.proj_text = nn.Linear(d_text, d_model)
-
-        self.topk = topk
-        self.d_model = d_model
     
-    def forward(self, seg_embedding, des_embedding):
-        image_proj = self.proj_image(seg_embedding)
-        text_proj = self.proj_text(des_embedding)
-
-        res = text_proj @ image_proj.transpose(-1, -2)
-        topk_logits = res.max(-1)[0]
-        topk_indexes = torch.topk(topk_logits, self.topk, dim=0)[1]
-
-        # 2025.4.25，现在已经跑起来保持原本顺序不变的代码。现在注释掉这里跑一下每保持原本顺序的测试
-        # 测试结果出来了，在230000steps之前，没有之前效果好，现在试试保证原始顺序不变的效果
-        topk_indexes, _ = torch.sort(topk_indexes, dim=0)  # 保证原始顺序不变
-
-        topk_des_embedding = torch.gather(text_proj, 0, topk_indexes.unsqueeze(-1).repeat(1, self.d_model))
-
-        final_des_embedding = self.encoder(topk_des_embedding.view(-1))
-        return final_des_embedding
+    def forward(self, x):
+        return self.encoder(x)

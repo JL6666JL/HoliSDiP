@@ -1136,27 +1136,7 @@ for epoch in range(first_epoch, args.num_train_epochs):
                     m[1][panoptic_seg == i] = color[1]
                     m[2][panoptic_seg == i] = color[2]
 
-                    # print(seg_emb_dict_batch[idx][cur]["emb"].shape)
-                    # input("222")
-
-                    now_lr_up = lr_up[idx]
-                    binary_mask = (panoptic_seg == i)
-                    binary_mask_3ch = binary_mask.unsqueeze(0).repeat(3,1,1)
-                    now_seg_lr_up = now_lr_up * binary_mask_3ch
-                    now_seg_lr_up = now_seg_lr_up.unsqueeze(0)
-                    with torch.no_grad():
-                        now_seg_lr_up_ram = ram_transforms(now_seg_lr_up)
-                        seg_lr_up_ram_hidden_embedding = RAM.generate_image_embeds(now_seg_lr_up_ram).squeeze(0)   #每个实例的image embedding
-                    
-                    #该实例对应的text embedding
-                    now_seg_emb_dict = seg_emb_dict_batch[idx][cur]["emb"].to(accelerator.device, dtype=weight_dtype).view(-1,1024)
-
-                    dcm_emb = dcm_encoder(seg_lr_up_ram_hidden_embedding, now_seg_emb_dict)
-                    
-                    # dcm_emb = dcm_encoder(seg_emb_dict_batch[idx][cur]["emb"].to(accelerator.device, dtype=weight_dtype))
-
-                    # print(dcm_emb.shape)
-                    # input("333")
+                    dcm_emb = dcm_encoder(seg_emb_dict_batch[idx][cur]["emb"].to(accelerator.device, dtype=weight_dtype))
 
                     scm[panoptic_seg == i] = dcm_emb
                     now_label = seg_emb_dict_batch[idx][cur]["label"]
@@ -1195,7 +1175,7 @@ for epoch in range(first_epoch, args.num_train_epochs):
             with torch.no_grad():
                 ram_image = lr_ram.to(accelerator.device, dtype=weight_dtype)
                 ram_encoder_hidden_states = RAM.generate_image_embeds(ram_image)
-            
+
             down_block_res_samples, mid_block_res_sample = controlnet(
                 noisy_latents,
                 timesteps,
