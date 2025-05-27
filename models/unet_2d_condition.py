@@ -740,8 +740,9 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         encoder_attention_mask: Optional[torch.Tensor] = None,
         return_dict: bool = True,
         image_encoder_hidden_states: torch.Tensor = None,
-        seg_mask: torch.Tensor = None, # Semantic segmentation map
-        scm: torch.Tensor = None, # Semantic CLIP Map
+        scm_hf: torch.Tensor = None, 
+        scm_lf: torch.Tensor = None, 
+        lf_ratio: torch.Tensor = None, 
     ) -> Union[UNet2DConditionOutput, Tuple]:
         r"""
         The [`UNet2DConditionModel`] forward method.
@@ -962,8 +963,9 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                     cross_attention_kwargs=cross_attention_kwargs,
                     encoder_attention_mask=encoder_attention_mask,
                     image_encoder_hidden_states=image_encoder_hidden_states,
-                    seg_mask=seg_mask,
-                    scm=scm,
+                    scm_hf=scm_hf,
+                    scm_lf=scm_lf,
+                    lf_ratio=lf_ratio,
                     **additional_residuals,
                 )
             else:
@@ -996,8 +998,9 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                 cross_attention_kwargs=cross_attention_kwargs,
                 encoder_attention_mask=encoder_attention_mask,
                 image_encoder_hidden_states=image_encoder_hidden_states,
-                seg_mask=seg_mask,
-                scm=scm,
+                scm_hf=scm_hf,
+                scm_lf=scm_lf,
+                lf_ratio=lf_ratio,
             )
             # To support T2I-Adapter-XL
             if (
@@ -1034,8 +1037,9 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     image_encoder_hidden_states=image_encoder_hidden_states,
-                    seg_mask=seg_mask,
-                    scm=scm,
+                    scm_hf=scm_hf,
+                    scm_lf=scm_lf,
+                    lf_ratio=lf_ratio,
                 )
             else:
                 sample = upsample_block(

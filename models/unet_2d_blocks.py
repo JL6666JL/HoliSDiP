@@ -727,16 +727,17 @@ class UNetMidBlock2DCrossAttn(nn.Module):
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         image_encoder_hidden_states: Optional[torch.FloatTensor] = None,
-        seg_mask: Optional[torch.FloatTensor] = None,
-        scm: Optional[torch.FloatTensor] = None,
+        scm_hf: Optional[torch.FloatTensor] = None,
+        scm_lf: Optional[torch.FloatTensor] = None,
+        lf_ratio: torch.Tensor = None,
     ) -> torch.FloatTensor:
         hidden_states = self.resnets[0](hidden_states, temb)
 
-        # make the shape of seg_mask the same as hidden_states, using nearest interpolation
-        if seg_mask is not None:
-            seg_mask = F.interpolate(seg_mask, size=hidden_states.shape[-2:], mode="nearest")
-        if scm is not None:
-            scm = F.interpolate(scm, size=hidden_states.shape[-2:], mode="nearest")
+        # make the shape of scm_hf the same as hidden_states, using nearest interpolation
+        if scm_hf is not None:
+            scm_hf = F.interpolate(scm_hf, size=hidden_states.shape[-2:], mode="nearest")
+        if scm_lf is not None:
+            scm_lf = F.interpolate(scm_lf, size=hidden_states.shape[-2:], mode="nearest")
 
         if self.use_image_cross_attention and self.use_msft_mid:
             for attn, caption_attn,image_attn, resnet, msft_mid in zip(self.attentions, self.caption_attentions,self.image_attentions, self.resnets[1:], self.msft_mid):
@@ -778,7 +779,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                         return_dict=False,
                     )[0]
                     ## for sft
-                    hidden_states = msft_mid(hidden_states, seg_mask, scm)
+                    hidden_states = msft_mid(hidden_states, scm_hf, scm_lf, lf_ratio)
 
                     hidden_states = torch.utils.checkpoint.checkpoint(
                         create_custom_forward(resnet),
@@ -813,7 +814,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                         return_dict=False,
                     )[0]
                     ## for sft
-                    hidden_states = msft_mid(hidden_states, seg_mask, scm)
+                    hidden_states = msft_mid(hidden_states, scm_hf, scm_lf, lf_ratio)
                     hidden_states = resnet(hidden_states, temb)
 
         elif not self.use_image_cross_attention and self.use_msft_mid:
@@ -847,7 +848,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                         return_dict=False,
                     )[0]
                     ## for sft
-                    hidden_states = msft_mid(hidden_states, seg_mask, scm)
+                    hidden_states = msft_mid(hidden_states, scm_hf, scm_lf, lf_ratio)
                     hidden_states = torch.utils.checkpoint.checkpoint(
                         create_custom_forward(resnet),
                         hidden_states,
@@ -872,7 +873,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                         return_dict=False,
                     )[0] 
                     ## for sft
-                    hidden_states = msft_mid(hidden_states, seg_mask, scm)
+                    hidden_states = msft_mid(hidden_states, scm_hf, scm_lf, lf_ratio)
                     hidden_states = resnet(hidden_states, temb)
 
         elif self.use_image_cross_attention and not self.use_msft_mid:
@@ -1411,16 +1412,17 @@ class CrossAttnDownBlock2D(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         additional_residuals=None,
         image_encoder_hidden_states: Optional[torch.FloatTensor] = None,
-        seg_mask: Optional[torch.FloatTensor] = None,
-        scm: Optional[torch.FloatTensor] = None,
+        scm_hf: Optional[torch.FloatTensor] = None,
+        scm_lf: Optional[torch.FloatTensor] = None,
+        lf_ratio: torch.Tensor =None,
     ):
         output_states = ()
 
-        # make the shape of seg_mask the same as hidden_states, using nearest interpolation
-        if seg_mask is not None:
-            seg_mask = F.interpolate(seg_mask, size=hidden_states.shape[-2:], mode="nearest")
-        if scm is not None:
-            scm = F.interpolate(scm, size=hidden_states.shape[-2:], mode="nearest")
+        # make the shape of scm_hf the same as hidden_states, using nearest interpolation
+        if scm_hf is not None:
+            scm_hf = F.interpolate(scm_hf, size=hidden_states.shape[-2:], mode="nearest")
+        if scm_lf is not None:
+            scm_lf = F.interpolate(scm_lf, size=hidden_states.shape[-2:], mode="nearest")
 
         # attention_mask和encoder_attention_mask都是None
         # True True
@@ -1473,7 +1475,7 @@ class CrossAttnDownBlock2D(nn.Module):
                     )[0]
                     ## for sft
                     if self.use_msft_down:
-                        hidden_states = msft_down(hidden_states, seg_mask, scm)
+                        hidden_states = msft_down(hidden_states, scm_hf, scm_lf, lf_ratio)
                 else:
                     hidden_states = resnet(hidden_states, temb)
                     hidden_states = attn(
@@ -1504,7 +1506,7 @@ class CrossAttnDownBlock2D(nn.Module):
                     )[0]
                     ## for sft
                     if self.use_msft_down:
-                        hidden_states = msft_down(hidden_states, seg_mask, scm)
+                        hidden_states = msft_down(hidden_states, scm_hf, scm_lf, lf_ratio)
 
                 # apply additional residuals to the output of the last pair of resnet and attention blocks
                 if i == len(blocks) - 1 and additional_residuals is not None:
@@ -1551,7 +1553,7 @@ class CrossAttnDownBlock2D(nn.Module):
                     )[0]
                     ## for sft
                     if self.use_msft_down:
-                        hidden_states = msft_down(hidden_states, seg_mask, scm)
+                        hidden_states = msft_down(hidden_states, scm_hf, scm_lf, lf_ratio)
                 else:
                     hidden_states = resnet(hidden_states, temb)
                     hidden_states = attn(
@@ -1572,7 +1574,7 @@ class CrossAttnDownBlock2D(nn.Module):
                     )[0]
                     ## for sft
                     if self.use_msft_down:
-                        hidden_states = msft_down(hidden_states, seg_mask, scm)
+                        hidden_states = msft_down(hidden_states, scm_hf, scm_lf, lf_ratio)
 
                 # apply additional residuals to the output of the last pair of resnet and attention blocks
                 if i == len(blocks) - 1 and additional_residuals is not None:
@@ -2877,15 +2879,16 @@ class CrossAttnUpBlock2D(nn.Module):
         attention_mask: Optional[torch.FloatTensor] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         image_encoder_hidden_states: Optional[torch.FloatTensor] = None,
-        seg_mask: Optional[torch.FloatTensor] = None,
-        scm: Optional[torch.FloatTensor] = None,
+        scm_hf: Optional[torch.FloatTensor] = None,
+        scm_lf: Optional[torch.FloatTensor] = None,
+        lf_ratio: torch.Tensor = None
     ):  
 
-        # mask sure the shape of seg_mask is the same as hidden_states, using nearest interpolation
-        if seg_mask is not None:
-            seg_mask = F.interpolate(seg_mask, size=hidden_states.shape[-2:], mode='nearest')
-        if scm is not None:
-            scm = F.interpolate(scm, size=hidden_states.shape[-2:], mode='nearest')
+        # mask sure the shape of scm_hf is the same as hidden_states, using nearest interpolation
+        if scm_hf is not None:
+            scm_hf = F.interpolate(scm_hf, size=hidden_states.shape[-2:], mode='nearest')
+        if scm_lf is not None:
+            scm_lf = F.interpolate(scm_lf, size=hidden_states.shape[-2:], mode='nearest')
 
         if self.use_image_cross_attention and self.use_msft_up:
             for resnet, attn, caption_attn,image_attn, msft_up in zip(self.resnets, self.attentions, self.caption_attentions,self.image_attentions, self.msft_up):
@@ -2938,7 +2941,7 @@ class CrossAttnUpBlock2D(nn.Module):
                         return_dict=False,
                     )[0]
                     ## for sft
-                    hidden_states = msft_up(hidden_states, seg_mask, scm)
+                    hidden_states = msft_up(hidden_states, scm_hf, scm_lf, lf_ratio)
                 else:
                     hidden_states = resnet(hidden_states, temb)
                     hidden_states = attn(
@@ -2967,7 +2970,7 @@ class CrossAttnUpBlock2D(nn.Module):
                         return_dict=False,
                     )[0]
                     ## for sft
-                    hidden_states = msft_up(hidden_states, seg_mask, scm)
+                    hidden_states = msft_up(hidden_states, scm_hf, scm_lf, lf_ratio)
         elif not self.use_image_cross_attention and self.use_msft_up:
             for resnet, attn, caption_attn,msft_up in zip(self.resnets, self.attentions, self.caption_attentions,self.msft_up):
                 # pop res hidden states
@@ -3010,7 +3013,7 @@ class CrossAttnUpBlock2D(nn.Module):
                         return_dict=False,
                     )[0]
                     ## for sft
-                    hidden_states = msft_up(hidden_states, seg_mask, scm)
+                    hidden_states = msft_up(hidden_states, scm_hf, scm_lf, lf_ratio)
                 else:
                     hidden_states = resnet(hidden_states, temb)
                     hidden_states = attn(
@@ -3030,7 +3033,7 @@ class CrossAttnUpBlock2D(nn.Module):
                         return_dict=False,
                     )[0]
                     ## for sft
-                    hidden_states = msft_up(hidden_states, seg_mask, scm)
+                    hidden_states = msft_up(hidden_states, scm_hf, scm_lf, lf_ratio)
         
         elif self.use_image_cross_attention and not self.use_msft_up:
             for resnet, attn, caption_attn,image_attn in zip(self.resnets, self.attentions, self.caption_attentions,self.image_attentions):

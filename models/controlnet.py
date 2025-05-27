@@ -660,9 +660,10 @@ class ControlNetModel(ModelMixin, ConfigMixin, FromOriginalControlnetMixin):
         guess_mode: bool = False,
         return_dict: bool = True,
         image_encoder_hidden_states: torch.Tensor = None,
-        seg_mask: torch.Tensor = None,
-        scm: torch.Tensor = None,
+        scm_hf: torch.Tensor = None,
+        scm_lf: torch.Tensor = None,
         vae_encode_condition_hidden_states: torch.Tensor = None, 
+        lf_ratio : torch.Tensor = None, 
     ) -> Union[ControlNetOutput, Tuple]:
         """
         The [`ControlNetModel`] forward method.
@@ -791,8 +792,9 @@ class ControlNetModel(ModelMixin, ConfigMixin, FromOriginalControlnetMixin):
                     attention_mask=attention_mask,
                     cross_attention_kwargs=cross_attention_kwargs,
                     image_encoder_hidden_states=image_encoder_hidden_states,
-                    seg_mask=seg_mask,
-                    scm=scm
+                    scm_hf=scm_hf,
+                    scm_lf=scm_lf,
+                    lf_ratio=lf_ratio,
                 )
             else:
                 sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
@@ -809,8 +811,9 @@ class ControlNetModel(ModelMixin, ConfigMixin, FromOriginalControlnetMixin):
                 attention_mask=attention_mask,
                 cross_attention_kwargs=cross_attention_kwargs,
                 image_encoder_hidden_states=image_encoder_hidden_states,
-                seg_mask=seg_mask,
-                scm=scm
+                scm_hf=scm_hf,
+                scm_lf=scm_lf,
+                lf_ratio=lf_ratio,
             )
 
         # 5. Control net blocks

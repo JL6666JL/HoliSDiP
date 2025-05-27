@@ -61,24 +61,30 @@ class GFM(nn.Module):
         self.param_free_norm = create_normalization(norm_type, input_nc)
 
         # Image SFT (SAFT block with Segmentation Mask)
-        self.image_sft = SAFT(input_nc, seg_nc)
+        # self.image_sft = SAFT(input_nc, seg_nc)
 
         # Text SFT (SAFT block with Segmentation-CLIP map)
-        self.text_sft = SAFT(input_nc, text_nc)
+        self.text_hf_sft = SAFT(input_nc, text_nc)
+        self.text_lf_sft = SAFT(input_nc, text_nc)
 
-    def forward(self, input_feat, seg_mask, scm):
+
+    def forward(self, input_feat, scm_hf, scm_lf, lf_ratio):
 
         # Normalize the input feature
         input_feat_normalized = self.param_free_norm(input_feat)
         
-        # Apply the Image SAFT
-        image_sft_out = self.image_sft(input_feat_normalized, seg_mask)
+        # # Apply the Image SAFT
+        # image_sft_out = self.image_sft(input_feat_normalized, seg_mask)
 
-        # Apply the Text SAFT
-        text_sft_out = self.text_sft(input_feat_normalized, scm)
+        # # Apply the Text SAFT
+        # text_sft_out = self.text_sft(input_feat_normalized, scm)
+
+        text_hf_sft_out = self.text_hf_sft(input_feat_normalized, scm_hf)
+        text_lf_sft_out = self.text_lf_sft(input_feat_normalized, scm_lf)
+        lf_ratio = lf_ratio.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
         # Sum the outputs from both Image and Text SAFT blocks
-        fused_output = image_sft_out + text_sft_out
+        fused_output = (1-lf_ratio)*text_hf_sft_out + lf_ratio*text_lf_sft_out
         
         return fused_output
 

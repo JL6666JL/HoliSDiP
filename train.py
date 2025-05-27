@@ -946,7 +946,6 @@ max_length = 1 # the max length of the clip embedding of the category
 scm_dim = max_length*1024
 scm_list = torch.zeros(len(ADE20k_NAMES), scm_dim, device=accelerator.device)
 # scm_init = torch.zeros((args.train_batch_size, args.resolution, args.resolution, scm_dim)).to(accelerator.device)
-scm_init = torch.zeros((args.train_batch_size, args.resolution, args.resolution, scm_dim)).to(accelerator.device)
 mask_init = torch.zeros((args.train_batch_size, 3, args.resolution, args.resolution)).to(accelerator.device)
 for i, name in enumerate(ADE20k_NAMES):
     class_token = tokenizer(name, return_tensors="pt")
@@ -1041,7 +1040,8 @@ progress_bar = tqdm(
     disable=not accelerator.is_local_main_process,
 )
 
-
+scm_hf_init = torch.zeros((args.train_batch_size, args.resolution, args.resolution, scm_dim)).to(accelerator.device)
+scm_lf_init = torch.zeros((args.train_batch_size, args.resolution, args.resolution, scm_dim)).to(accelerator.device)
 for epoch in range(first_epoch, args.num_train_epochs):
     for step, batch in enumerate(train_dataloader):
         # batch: {['gt', 'kernel1', 'kernel2', 'sinc_kernel', 'lq_path']}
@@ -1065,6 +1065,8 @@ for epoch in range(first_epoch, args.num_train_epochs):
             timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
             timesteps = timesteps.long()
 
+            lf_ratio = timesteps / noise_scheduler.config.num_train_timesteps
+
             # Add noise to the latents according to the noise magnitude at each timestep
             # (this is the forward diffusion process)
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
@@ -1073,58 +1075,21 @@ for epoch in range(first_epoch, args.num_train_epochs):
             lr_up = F.interpolate(lr_batch, size=(args.resolution, args.resolution), mode="bicubic")
 
             # make scm_init, mask_init 0, which are used to store the masks
-            scm_init.zero_()
+            scm_hf_init.zero_()
+            scm_lf_init.zero_()
             mask_init.zero_()
-            scm_batch = []
+            scm_batch_hf = []
+            scm_batch_lf = []
             seg_labels = []
             seg_masks = []
-            # create seg masks
-            # with torch.no_grad():
-            #     # seg model forward                
-            #     lr_up_seg = [{'image': (img * 255)} for img in lr_up]
-            #     labels = seg_model(lr_up_seg)
-            #     labels = torch.cat([label['sem_seg'].argmax(dim=0).unsqueeze(0) for label in labels], dim=0)
 
-            #     # fill labels with color
-            #     for idx, label in enumerate(labels):
-            #         scm = scm_init[idx]
-            #         m = mask_init[idx]
-            #         assert torch.all(scm == 0)
-            #         assert torch.all(m == 0)
-
-            #         seg_label = ''
-            #         for i in torch.unique(label):
-            #             # build seg mask
-            #             color = ADE20k_COLORS[i]
-            #             m[0][label == i] = color[0]
-            #             m[1][label == i] = color[1]
-            #             m[2][label == i] = color[2]
-                        
-            #             # build SCMap
-            #             scm[label == i] = scm_list[i]
-
-            #             # build text prompt with semantic segmentation labels
-            #             name = ADE20k_NAMES[i]
-            #             seg_label += f"{name}, "
-            #             assert not torch.all(scm == 0)
-            #             assert not torch.all(m == 0)
-
-            #         # random drop text prompt during training
-            #         if random.random() < args.null_text_ratio:
-            #             seg_label = ''
-
-            #         seg_labels.append(seg_label[:-2]) # remove the last comma and space, then append to seg_labels
-            #         scm_batch.append(scm.permute(2, 0, 1).unsqueeze(0))
-            #         seg_masks.append(m.unsqueeze(0))
-
-            #     scm_batch = torch.cat(scm_batch, dim=0).to(accelerator.device, dtype=weight_dtype)
-            #     seg_masks = torch.cat(seg_masks, dim=0)
-            #     seg_masks = (seg_masks / 255.0).to(accelerator.device, dtype=weight_dtype)
-
+            # idx是遍历当前batch，cur是遍历所有的实例
             for idx, panoptic_seg in enumerate(panoptic_seg_batch):
-                scm = scm_init[idx].to(accelerator.device, dtype=weight_dtype)
+                scm_hf = scm_hf_init[idx].to(accelerator.device, dtype=weight_dtype)
+                scm_lf = scm_lf_init[idx].to(accelerator.device, dtype=weight_dtype)
                 m = mask_init[idx]
-                assert torch.all(scm == 0)
+                assert torch.all(scm_hf == 0)
+                assert torch.all(scm_lf == 0)
                 assert torch.all(m == 0)
 
                 seg_label = ''
@@ -1136,23 +1101,28 @@ for epoch in range(first_epoch, args.num_train_epochs):
                     m[1][panoptic_seg == i] = color[1]
                     m[2][panoptic_seg == i] = color[2]
 
-                    dcm_emb = dcm_encoder(seg_emb_dict_batch[idx][cur]["emb"].to(accelerator.device, dtype=weight_dtype))
+                    dcm_hf_emb = dcm_encoder(seg_emb_dict_batch[idx][cur]["hf_emb"].to(accelerator.device, dtype=weight_dtype))
+                    dcm_lf_emb = dcm_encoder(seg_emb_dict_batch[idx][cur]["lf_emb"].to(accelerator.device, dtype=weight_dtype))
 
-                    scm[panoptic_seg == i] = dcm_emb
+                    scm_hf[panoptic_seg == i] = dcm_hf_emb
+                    scm_lf[panoptic_seg == i] = dcm_lf_emb
                     now_label = seg_emb_dict_batch[idx][cur]["label"]
                     seg_label += f"{now_label}, "
                     
-                    assert not torch.all(scm == 0)
+                    assert not torch.all(scm_hf == 0)
+                    assert not torch.all(scm_lf == 0)
                     assert not torch.all(m == 0)
 
                 if random.random() < args.null_text_ratio:
                     seg_label = ''
 
                 seg_labels.append(seg_label[:-2]) # remove the last comma and space, then append to seg_labels
-                scm_batch.append(scm.permute(2, 0, 1).unsqueeze(0))
+                scm_batch_hf.append(scm_hf.permute(2, 0, 1).unsqueeze(0))
+                scm_batch_lf.append(scm_lf.permute(2, 0, 1).unsqueeze(0))
                 seg_masks.append(m.unsqueeze(0))
 
-            scm_batch = torch.cat(scm_batch, dim=0).to(accelerator.device, dtype=weight_dtype)
+            scm_batch_hf = torch.cat(scm_batch_hf, dim=0).to(accelerator.device, dtype=weight_dtype)
+            scm_batch_lf = torch.cat(scm_batch_lf, dim=0).to(accelerator.device, dtype=weight_dtype)
             seg_masks = torch.cat(seg_masks, dim=0)
             seg_masks = (seg_masks / 255.0).to(accelerator.device, dtype=weight_dtype) 
 
@@ -1160,7 +1130,8 @@ for epoch in range(first_epoch, args.num_train_epochs):
             accelerator.wait_for_everyone()
 
             # embed the scm_batch as a shared feature of MSFT layers
-            scm_batch = scm_encoder(scm_batch)
+            scm_batch_hf = scm_encoder(scm_batch_hf)
+            scm_batch_lf = scm_encoder(scm_batch_lf)
 
             # # Get the text embedding for conditioning
             inputs = tokenizer(
@@ -1182,10 +1153,11 @@ for epoch in range(first_epoch, args.num_train_epochs):
                 encoder_hidden_states=encoder_hidden_states,
                 caption_encoder_hidden_states = caption_encoder_hidden_states,
                 controlnet_cond=lr_up,
-                seg_mask=seg_masks,
-                scm=scm_batch,
+                scm_hf=scm_batch_hf,
+                scm_lf=scm_batch_lf,
                 return_dict=False,
                 image_encoder_hidden_states=ram_encoder_hidden_states,
+                lf_ratio = lf_ratio,
             )
 
             # Predict the noise residual
@@ -1199,8 +1171,9 @@ for epoch in range(first_epoch, args.num_train_epochs):
                 ],
                 mid_block_additional_residual=mid_block_res_sample.to(dtype=weight_dtype),
                 image_encoder_hidden_states=ram_encoder_hidden_states,
-                seg_mask=seg_masks,
-                scm=scm_batch,
+                scm_hf=scm_batch_hf,
+                scm_lf=scm_batch_lf,
+                lf_ratio = lf_ratio,
             ).sample       
 
             # Get the target for loss depending on the prediction type

@@ -1,14 +1,13 @@
-import torch
+import pickle
 
-# 加载 optimizer.bin 文件
-optimizer_state = torch.load("/data1/jianglei/work/HoliSDiP_fuxian/experiments/auth/optimizer.bin", map_location="cpu")
+# 替换为你的 .pkl 文件路径
+pkl_file_path = '/data2/jianglei/Holidataset/FFHQ_LSDIR/lfhf_local_descriptions/FFHQ_00000_00000_descriptions.pkl'
 
-# 检查优化器状态字典的键名
-print(optimizer_state.keys())  # 输出所有键，寻找 'step' 或 'state'
+# 读取 pkl 文件中的字典
+with open(pkl_file_path, 'rb') as f:
+    data_dict = pickle.load(f)
 
-# 如果使用 Adam/AdamW，步数通常存储在优化器的 'state' 字段中
-if 'state' in optimizer_state:
-    for param_id in optimizer_state['state']:
-        if 'step' in optimizer_state['state'][param_id]:
-            print(f"Training step: {optimizer_state['state'][param_id]['step']}")
-            break
+# 可选：打印字典的内容
+print("字典内容：")
+for key, value in data_dict.items():
+    print(f"{key}: {value}")
