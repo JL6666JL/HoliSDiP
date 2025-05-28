@@ -5,6 +5,7 @@ import cv2
 import pandas as pd
 import numpy as np
 from torchvision import transforms
+import argparse
 
 def load_image(path):
     """加载图像并转换为 PyTorch 张量 (1, C, H, W)"""
@@ -33,11 +34,18 @@ def calculate_metrics(hr_img, sr_img, metrics_dict):
     return psnr_value, ssim_value, lpips_value, musiq_value, maniqa_value, clipiqa_value
 
 def main():
-    datasets = ["DIV2K_V2_val", "RealSRVal_crop128", "DrealSRVal_crop128"]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--steps", type=str, default=None)
+    parser.add_argument("--sr_dir", type=str, default=None)
+    args = parser.parse_args()
+    steps = args.steps
+    sr_dir = args.sr_dir
+    # datasets = ["DIV2K_V2_val", "RealSRVal_crop128", "DrealSRVal_crop128"]
+    datasets = ["RealSRVal_crop128", "DrealSRVal_crop128"]
     for dataset in datasets:
         hr_dir = f"/data1/jianglei/work/dataset/HoliSDiP/StableSR_testsets/{dataset}/gt"
-        sr_dir = f"/data2/jianglei/HoliSDiP_auth/samples/{dataset}/samples"
-        save_path = "/data2/jianglei/HoliSDiP/results/HoliSDiP_auth.xlsx"
+        sr_dir= os.path.join(sr_dir, dataset, "samples")
+        save_path = "/data2/jianglei/HoliSDiP/results/HoliSDiP_lfhf.xlsx"
 
         # 创建 `pyiqa` 评估器
         metrics_dict = {
@@ -76,6 +84,7 @@ def main():
                 print("SR路径不存在!")
 
         avg_metrics = {
+            "steps": steps,
             "Folder": dataset,
             "PSNR": np.mean(psnr_list),
             "SSIM": np.mean(ssim_list),

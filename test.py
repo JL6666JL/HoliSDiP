@@ -328,42 +328,36 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
                 semantic_result = Image.fromarray(semantic_result)
                 semantic_result.save(f'{args.output_dir}/masks_meta/{os.path.basename(image_name)}')
 
-                scm = torch.zeros((args.process_size, args.process_size, scm_dim)).to(accelerator.device)
-                seg_mask = torch.zeros((3, args.process_size, args.process_size))
-                # for i in torch.unique(label):
-                #     # build seg mask
-                #     color = ADE20k_COLORS[i]
-                #     seg_mask[0][label == i] = color[0]
-                #     seg_mask[1][label == i] = color[1]
-                #     seg_mask[2][label == i] = color[2]
-
-                #     # build scm 
-                #     scm[label == i] = scm_list[i]
-
-                #     # build text prompts
-                #     name = ADE20k_NAMES[i]
-                #     validation_prompt += f"{name}, "
+                scm_hf = torch.zeros((args.process_size, args.process_size, scm_dim)).to(accelerator.device)
+                scm_lf = torch.zeros((args.process_size, args.process_size, scm_dim)).to(accelerator.device)
+                # seg_mask = torch.zeros((3, args.process_size, args.process_size))
 
                 panoptic_seg = torch.from_numpy(panoptic_seg)
                 for i in torch.unique(panoptic_seg):
                     cur = int(i)
-                    color = seg_emb_dict[cur]["color"]
-                    seg_mask[0][panoptic_seg == i] = color[0]
-                    seg_mask[1][panoptic_seg == i] = color[1]
-                    seg_mask[2][panoptic_seg == i] = color[2]
+                    # color = seg_emb_dict[cur]["color"]
+                    # seg_mask[0][panoptic_seg == i] = color[0]
+                    # seg_mask[1][panoptic_seg == i] = color[1]
+                    # seg_mask[2][panoptic_seg == i] = color[2]
 
-                    dcm_emb = dcm_encoder(seg_emb_dict[cur]["emb"].to(accelerator.device))
-                    scm[panoptic_seg == i] =dcm_emb
+                    dcm_hf_emb = dcm_encoder(seg_emb_dict[cur]["hf_emb"]).to(accelerator.device)
+                    dcm_lf_emb = dcm_encoder(seg_emb_dict[cur]["lf_emb"]).to(accelerator.device)
+                    
+                    scm_hf[panoptic_seg == i] =dcm_hf_emb
+                    scm_lf[panoptic_seg == i] =dcm_lf_emb
                     now_label = seg_emb_dict[cur]["label"]
                     validation_prompt += f"{now_label}, "
 
-                scm = scm.permute(2, 0, 1).unsqueeze(0)
-                scm = scm_encoder(scm).to(accelerator.device)
+                scm_hf = scm_hf.permute(2, 0, 1).unsqueeze(0)
+                scm_lf = scm_lf.permute(2, 0, 1).unsqueeze(0)
+
+                scm_hf = scm_encoder(scm_hf).to(accelerator.device)
+                scm_lf = scm_encoder(scm_lf).to(accelerator.device)
                 
-                seg_mask = seg_mask.permute(1, 2, 0).numpy().astype(np.uint8)
-                seg_mask = Image.fromarray(seg_mask)
-                seg_mask.save(f'{args.output_dir}/masks/{os.path.basename(image_name)}')
-                seg_mask = tensor_transforms(seg_mask).unsqueeze(0).to(accelerator.device)
+                # seg_mask = seg_mask.permute(1, 2, 0).numpy().astype(np.uint8)
+                # seg_mask = Image.fromarray(seg_mask)
+                # seg_mask.save(f'{args.output_dir}/masks/{os.path.basename(image_name)}')
+                # seg_mask = tensor_transforms(seg_mask).unsqueeze(0).to(accelerator.device)
 
             if args.added_prompt == "":
                 validation_prompt = validation_prompt[:-2] # remove the last comma and space
@@ -382,7 +376,7 @@ def main(args, enable_xformers_memory_efficient_attention=True,):
 
             with torch.autocast("cuda"):
                 image = pipeline(
-                        validation_prompt, validation_image, caption_embeds=description_embeddings, seg_mask=seg_mask, scm=scm, num_inference_steps=args.num_inference_steps, generator=generator, height=height, width=width,
+                        validation_prompt, validation_image, caption_embeds=description_embeddings, scm_hf=scm_hf, scm_lf=scm_lf, num_inference_steps=args.num_inference_steps, generator=generator, height=height, width=width,
                         guidance_scale=args.guidance_scale, negative_prompt=negative_prompt, conditioning_scale=args.conditioning_scale,
                         start_point=args.start_point, ram_encoder_hidden_states=ram_encoder_hidden_states,
                         latent_tiled_size=args.latent_tiled_size, latent_tiled_overlap=args.latent_tiled_overlap,
